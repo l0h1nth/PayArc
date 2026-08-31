@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { CreatePaymentLinkInput, InvoiceRecord, OrderRecord, PaymentLinkRecord, PaymentRecord } from "../domain/types.js";
+import type { CheckoutOrderRecord, CreateCheckoutOrderInput, CreatePaymentLinkInput, InvoiceRecord, OrderRecord, PaymentLinkRecord, PaymentRecord } from "../domain/types.js";
 import type { PaymentProvider } from "./payment-provider.js";
 import { ProviderError } from "./payment-provider.js";
 
@@ -29,6 +29,18 @@ export class MockPaymentProvider implements PaymentProvider {
     const payment = this.payments.get(paymentId);
     if (!payment) throw new ProviderError(`Mock payment not found: ${paymentId}`, 404, false);
     return structuredClone(payment);
+  }
+
+  async createCheckoutOrder(input: CreateCheckoutOrderInput): Promise<CheckoutOrderRecord> {
+    const id = `order_mock_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
+    this.orders.set(id, { id, notes: structuredClone(input.notes) });
+    return {
+      id,
+      amount: input.amount,
+      currency: input.currency,
+      receipt: input.receipt,
+      status: "created"
+    };
   }
 
   async fetchOrder(orderId: string): Promise<OrderRecord> {

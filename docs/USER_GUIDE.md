@@ -33,7 +33,7 @@ The browser URL stores `view` and `case`, so refresh, back, and forward restore 
 | B2B Receivables | Invoice aging, blockers, and collections | Resolve blocker, run next action |
 | Promises & Voice | Structured Hinglish intents and promise ledger | Promise tomorrow, Send UPI, Already paid, Opt out |
 | Recovery Cases | Evidence and bounded execution for one obligation | Approve, Execute, WhatsApp, Pause, Suppress |
-| Scenario Lab | Safe mock proof of edge cases | Run any of 15 scenarios |
+| Scenario Lab | Real Razorpay Test Checkout plus isolated edge-case simulations | Launch a genuine failed payment or run any of 15 controlled scenarios |
 | Events & Audit | Signed event history and hash-chained decisions | Inspect evidence |
 | Analytics | Treatment-versus-control recovery measurement | Read causal uplift |
 | Security Center | Forgery, replay, injection, and tamper controls | Run security proofs, verify ledger |
@@ -49,6 +49,17 @@ The browser URL stores `view` and `case`, so refresh, back, and forward restore 
 - **WhatsApp delivery**: shows the masked Razorpay contact, its source, and the consent proof. There is no phone-number field. An operator attestation is available only as a controlled fallback.
 - **Pause 24h**: stops contact during a promise-to-pay window.
 - **Suppress**: permanently stops outreach for the case.
+
+## Scenario Lab: genuine Razorpay proof
+
+1. Connect Razorpay Test Mode keys and configure `payment.failed`, `payment.authorized`, `payment.captured`, and `order.paid` webhooks.
+2. Open **Scenario Lab**, enter the amount in rupees, and click **Launch real test checkout**.
+3. PayArc creates a Razorpay Order on the server and opens hosted Standard Checkout with the public Test Key ID.
+4. Choose a payment method and select **Failure** on Razorpay's mock bank page. Do not close the backend or public webhook tunnel.
+5. The run changes from **Checkout Ready** to **Failure Received** only after a valid Razorpay webhook arrives.
+6. The background worker fetches the payment from Razorpay and creates the case. Click **Open Recovery Case** from the run card.
+
+Choosing **Success** proves the non-recovery branch: PayArc verifies the Checkout HMAC and fetches the authoritative payment, but correctly creates no recovery case because no revenue is at risk. The 15 controlled scenarios below this panel remain isolated for provider outages, replay, forgery, prompt injection, and other conditions Razorpay cannot expose safely on demand.
 
 ## WhatsApp modes
 

@@ -1,4 +1,4 @@
-import { randomUUID, timingSafeEqual } from "node:crypto";
+import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import fastifyStatic from "@fastify/static";
 import Fastify, { type FastifyInstance } from "fastify";
@@ -12,7 +12,7 @@ import {
   type DecisionProvider
 } from "./providers/decision-provider.js";
 import { MockPaymentProvider } from "./providers/mock-payment-provider.js";
-import type { PaymentProvider } from "./providers/payment-provider.js";
+import { ProviderError, type PaymentProvider } from "./providers/payment-provider.js";
 import { RazorpayProvider } from "./providers/razorpay-provider.js";
 import {
   ClickToChatWhatsAppProvider,
@@ -207,7 +207,10 @@ export async function buildApplication(options: BuildOptions = {}): Promise<AppC
       );
       if (result.eventRowId !== null) {
         const stored = repository.getEvent(result.eventRowId);
-        if (stored) revenueIntelligence.observeProviderEvent(stored.normalized);
+        if (stored) {
+          repository.observeRazorpayTestEvent(stored.normalized, clock.now());
+          revenueIntelligence.observeProviderEvent(stored.normalized);
+        }
       }
       return reply.code(result.duplicate ? 200 : 202).send({ accepted: true, duplicate: result.duplicate });
     } catch (error) {
@@ -345,6 +348,85 @@ export async function buildApplication(options: BuildOptions = {}): Promise<AppC
     errorReason: z.string().default("incorrect_otp"),
     errorSource: z.string().default("customer"),
     untrustedNote: z.string().max(500).optional()
+  });
+
+  const razorpayTestRunSchema = z.object({
+    amount: z.number().int().min(100).max(10_000_000).default(98_900),
+    currency: z.literal("INR").default("INR"),
+    description: z.string().trim().min(3).max(120).default("PayArc revenue recovery test")
+  });
+
+  app.get("/api/razorpay-test/runs", async () => ({
+    available: provider.mode === "razorpay",
+    reason: provider.mode === "razorpay" ? null : "Set PAYMENT_PROVIDER_MODE=razorpay with Test Mode keys to enable genuine checkout runs.",
+    checkoutKeyId: provider.mode === "razorpay" ? config.razorpay.keyId : null,
+    runs: repository.listRazorpayTestRuns(20)
+  }));
+
+  app.post<{ Body: unknown }>("/api/razorpay-test/runs", async (request, reply) => {
+    if (provider.mode !== "razorpay") {
+      return reply.code(409).send({ error: "Razorpay Test Mode is not connected" });
+    }
+    const input = parseJsonBody(request.body, razorpayTestRunSchema);
+    const id = `rtest_${randomUUID().replaceAll("-", "").slice(0, 20)}`;
+    const receipt = `payarc_${randomUUID().replaceAll("-", "").slice(0, 24)}`;
+    try {
+      const order = await provider.createCheckoutOrder({
+        amount: input.amount,
+        currency: input.currency,
+        receipt,
+        notes: { payarc_test_run: id, purpose: "revenue_recovery_proof" }
+      });
+      if (order.amount !== input.amount || order.currency !== input.currency || order.receipt !== receipt) {
+        throw new Error("Razorpay returned contradictory order parameters");
+      }
+      const run = repository.createRazorpayTestRun({
+        id,
+        providerOrderId: order.id,
+        amount: order.amount,
+        currency: order.currency,
+        description: input.description,
+        now: clock.now()
+      });
+      return reply.code(201).send({ run, checkoutKeyId: config.razorpay.keyId });
+    } catch (error) {
+      const status = error instanceof ProviderError && error.status === 429 ? 429 : 502;
+      return reply.code(status).send({ error: error instanceof Error ? error.message : "Unable to create Razorpay Test Order" });
+    }
+  });
+
+  app.post<{ Params: { runId: string }; Body: unknown }>("/api/razorpay-test/runs/:runId/verify", async (request, reply) => {
+    if (provider.mode !== "razorpay") return reply.code(409).send({ error: "Razorpay Test Mode is not connected" });
+    const run = repository.getRazorpayTestRun(request.params.runId);
+    if (!run) return reply.code(404).send({ error: "Razorpay Test Run not found" });
+    const input = parseJsonBody(request.body, z.object({
+      paymentId: z.string().min(6).max(100),
+      orderId: z.string().min(6).max(100),
+      signature: z.string().regex(/^[a-f0-9]{64}$/i)
+    }));
+    if (input.orderId !== run.providerOrderId) return reply.code(409).send({ error: "Checkout order does not match the Test Run" });
+    const expected = createHmac("sha256", config.razorpay.keySecret)
+      .update(`${run.providerOrderId}|${input.paymentId}`)
+      .digest("hex");
+    const expectedBuffer = Buffer.from(expected, "hex");
+    const receivedBuffer = Buffer.from(input.signature, "hex");
+    if (expectedBuffer.length !== receivedBuffer.length || !timingSafeEqual(expectedBuffer, receivedBuffer)) {
+      return reply.code(401).send({ error: "Razorpay checkout signature is invalid" });
+    }
+    try {
+      const payment = await provider.fetchPayment(input.paymentId);
+      if (payment.orderId !== run.providerOrderId || payment.amount !== run.amount || payment.currency !== run.currency) {
+        return reply.code(409).send({ error: "Razorpay payment does not match the Test Run financial envelope" });
+      }
+      if (!["authorized", "captured"].includes(payment.status)) {
+        return reply.code(409).send({ error: `Razorpay payment is ${payment.status}, not successful` });
+      }
+      const status = payment.status === "captured" ? "PAYMENT_SUCCEEDED" as const : "PAYMENT_AUTHORIZED" as const;
+      return repository.markRazorpayTestRunVerified(run.id, payment.id, status, clock.now());
+    } catch (error) {
+      const status = error instanceof ProviderError && error.status === 404 ? 404 : 502;
+      return reply.code(status).send({ error: error instanceof Error ? error.message : "Unable to verify Razorpay payment" });
+    }
   });
 
   app.get("/api/demo/scenarios", async (request, reply) => {

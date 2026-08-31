@@ -1,4 +1,4 @@
-import type { Action, AuditEntry, CaseDetail, ChannelReadiness, DemoScenario, EventSummary, Metrics, PublicConfig, RecoveryCase, ScenarioResult, ScenarioRunSummary } from "./types";
+import type { Action, AuditEntry, CaseDetail, ChannelReadiness, DemoScenario, EventSummary, Metrics, PublicConfig, RazorpayTestLab, RazorpayTestRun, RecoveryCase, ScenarioResult, ScenarioRunSummary } from "./types";
 import type { RevenueObject, RevenueSnapshot } from "./revenue-types";
 
 export type RealtimeState = "connecting" | "live" | "reconnecting" | "offline";
@@ -52,6 +52,13 @@ export const api = {
   scenarioRuns: () => request<{ count: number; runs: ScenarioRunSummary[] }>("/api/demo/runs"),
   scenarioRun: (id: string) => request<ScenarioResult>(`/api/demo/runs/${id}`),
   runScenario: (id: string) => request<ScenarioResult>(`/api/demo/scenarios/${id}/run`, { method: "POST", body: "{}" }),
+  razorpayTestRuns: () => request<RazorpayTestLab>("/api/razorpay-test/runs"),
+  createRazorpayTestRun: (amount: number, description: string) => request<{ run: RazorpayTestRun; checkoutKeyId: string }>("/api/razorpay-test/runs", {
+    method: "POST", body: JSON.stringify({ amount, currency: "INR", description })
+  }),
+  verifyRazorpayTestRun: (runId: string, paymentId: string, orderId: string, signature: string) => request<RazorpayTestRun>(`/api/razorpay-test/runs/${runId}/verify`, {
+    method: "POST", body: JSON.stringify({ paymentId, orderId, signature })
+  }),
   runWorker: () => request<{ claimed: number; completed: number; ignored: number; failed: number }>("/api/worker/run", { method: "POST" }),
   approve: (id: string) => request<Action>(`/api/actions/${id}/approve`, { method: "POST" }),
   execute: (id: string) => request<Action>(`/api/actions/${id}/execute`, { method: "POST" }),

@@ -38,7 +38,7 @@ This turns revenue recovery into a portfolio-level control problem: maximize *in
 - Consent-aware WhatsApp click-to-chat and optional approved-template Cloud API delivery with no plaintext recipient persistence
 - Bounded concurrent autopilot workers, scheduled decision cooldowns, and exception-only merchant review
 - Just-in-time Razorpay contact resolution from the payment linked to an order, with order/payment note consent proof and idempotent automatic WhatsApp delivery
-- Isolated Scenario Lab that remains usable alongside real Razorpay Test Mode without contaminating merchant cases or events
+- Dual-mode Scenario Lab: genuine Razorpay Test Orders and hosted Checkout failures enter merchant cases through signed webhooks, while unsafe/provider-unavailable edge cases remain isolated
 - Built-in Operator Guide and complete workflow manual in [docs/USER_GUIDE.md](./docs/USER_GUIDE.md)
 - Offline automated security, integration, provider-contract, concurrency, and end-to-end tests
 
@@ -56,7 +56,7 @@ npm run build:ui
 npm run dev
 ```
 
-Open <http://127.0.0.1:3000>. The default is safe mock mode. The Scenario Lab can execute all 15 flows through the real webhook ingestion, worker, policy, action, outcome, metrics, and hash-chained audit boundaries without credentials.
+Open <http://127.0.0.1:3000>. The default is safe mock mode. The Scenario Lab can execute all 15 deterministic flows through isolated ingestion, worker, policy, action, outcome, metrics, and hash-chained audit boundaries without credentials. In Razorpay mode it also creates genuine Test Orders, launches hosted Standard Checkout, and admits failed payments into merchant Recovery Cases only through signed Razorpay webhooks.
 
 For frontend hot reload, keep the backend running and start `npm run dev:ui` in a second terminal, then open <http://127.0.0.1:5173>.
 

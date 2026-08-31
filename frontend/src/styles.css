@@ -404,3 +404,43 @@ button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{ou
   .trace-metrics,.trace-case,.trace-security{grid-template-columns:repeat(2,1fr)}
   .trace-events>div{grid-template-columns:28px 1fr auto}.trace-events code{display:none}
 }
+
+/* Genuine Razorpay Test Mode checkout proof, visually separate from simulations. */
+.real-test-lab{display:grid;grid-template-columns:minmax(0,1.45fr) minmax(330px,.55fr);padding:0;overflow:hidden;margin-bottom:18px;border-color:#cddbf2;background:linear-gradient(135deg,#fff 55%,#f0f6ff)}
+.real-test-main{padding:24px 26px}
+.real-test-heading{display:grid;grid-template-columns:48px 1fr auto;align-items:start;gap:14px}
+.real-test-heading .integration-logo{width:48px;height:48px}
+.real-test-heading h2{margin:3px 0 7px;font-size:21px;letter-spacing:-.025em}
+.real-test-heading p{max-width:780px;margin:0;color:#5e6d84;font-size:13px;line-height:1.55}
+.real-test-heading p strong{color:#17243a}
+.real-test-form{display:flex;align-items:end;gap:12px;margin:20px 0 17px}
+.real-test-form>label{display:grid;gap:6px}
+.real-test-form>label>span{color:#607089;font-size:11px;font-weight:700}
+.real-test-form>label>div{width:180px;height:42px;display:flex;align-items:center;gap:7px;padding:0 11px;border:1px solid #ccd6e6;border-radius:7px;background:#fff;color:#58729a}
+.real-test-form input{width:100%;border:0;outline:0;background:transparent;color:#18243a;font-size:14px;font-weight:700}
+.real-test-form>button{height:42px;padding:0 16px;border:0;border-radius:7px;background:#2368e8;color:#fff;display:flex;align-items:center;gap:8px;font-size:12px;font-weight:800;box-shadow:0 7px 18px #2368e830}
+.real-test-form>button svg{width:16px}
+.real-test-flow{display:grid;grid-template-columns:1fr 16px 1fr 16px 1fr 16px 1fr;align-items:center;gap:6px;padding:13px;border:1px solid #dee6f3;border-radius:9px;background:#f8faff}
+.real-test-flow>div{display:grid;grid-template-columns:25px 1fr;gap:8px;align-items:center;min-width:0}
+.real-test-flow i{width:25px;height:25px;border-radius:50%;background:#e4edff;color:#2368e8;display:grid;place-items:center;font-style:normal;font-size:10px;font-weight:800}
+.real-test-flow span{display:grid;gap:2px;color:#768399;font-size:9px;line-height:1.35}
+.real-test-flow strong{color:#243149;font-size:10px}
+.real-test-flow>svg{width:14px;color:#9eabc0}
+.real-test-runs{padding:22px;border-left:1px solid #dce5f3;background:#f8faff}
+.real-test-runs h3{margin:3px 0 0;font-size:15px}
+.real-test-runs>div:last-child{display:grid;gap:8px;margin-top:14px;max-height:286px;overflow:auto}
+.real-test-runs article{padding:11px;border:1px solid #dfe6f1;border-radius:8px;background:#fff;display:grid;grid-template-columns:1fr auto;gap:6px 10px}
+.real-test-runs article>strong{font-size:14px}
+.real-test-runs article>code{align-self:center;color:#6a7990;font-size:9px}
+.run-status{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;gap:8px}
+.run-status time{color:#8792a3;font-size:9px}
+.run-actions{grid-column:1/-1;padding-top:4px;border-top:1px solid #eef1f5}
+.run-actions button{border:0;background:transparent;color:#2868d5;padding:4px 0;display:flex;align-items:center;gap:6px;font-size:10px;font-weight:800}
+.run-actions button svg,.processing-note svg{width:13px}
+.processing-note{display:flex;align-items:center;gap:6px;color:#9b680b;font-size:10px;font-weight:700}
+.real-test-empty{min-height:120px;display:grid;place-items:center;align-content:center;gap:8px;color:#8290a5;font-size:11px}
+.real-test-empty svg{width:24px}
+.real-test-unavailable{display:flex;align-items:flex-start;gap:10px;margin-top:18px;padding:13px;border:1px solid #f0d9ae;border-radius:8px;background:#fff9ed;color:#8b5b08}
+.real-test-unavailable>div{display:grid;gap:4px}.real-test-unavailable span{font-size:11px;line-height:1.45}.real-test-unavailable svg{width:18px;flex:0 0 auto}
+@media(max-width:1180px){.real-test-lab{grid-template-columns:1fr}.real-test-runs{border-left:0;border-top:1px solid #dce5f3}.real-test-runs>div:last-child{grid-template-columns:repeat(2,minmax(0,1fr));max-height:none}}
+@media(max-width:760px){.real-test-main,.real-test-runs{padding:18px}.real-test-heading{grid-template-columns:42px 1fr}.real-test-heading>.status-pill{grid-column:2}.real-test-form{align-items:stretch;flex-direction:column}.real-test-form>label>div{width:100%}.real-test-form>button{justify-content:center}.real-test-flow{grid-template-columns:1fr}.real-test-flow>svg{display:none}.real-test-runs>div:last-child{grid-template-columns:1fr}}

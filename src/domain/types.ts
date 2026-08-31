@@ -159,6 +159,21 @@ export type OrderRecord = {
   notes: Record<string, string>;
 };
 
+export type CreateCheckoutOrderInput = {
+  amount: number;
+  currency: string;
+  receipt: string;
+  notes: Record<string, string>;
+};
+
+export type CheckoutOrderRecord = {
+  id: string;
+  amount: number;
+  currency: string;
+  receipt: string;
+  status: "created" | "attempted" | "paid";
+};
+
 export type InvoiceRecord = {
   id: string;
   subscriptionId: string;

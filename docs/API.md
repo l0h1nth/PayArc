@@ -61,6 +61,16 @@ Responses:
 
 Signed `payment.downtime.started`, `payment.downtime.updated`, and `payment.downtime.resolved` webhooks automatically update the incident radar and circuit breaker. Checkout URLs are merchant-registered authoritative references; arbitrary webhook notes never become executable URLs.
 
+## Razorpay Test Mode proof runs
+
+These APIs are available only when the configured provider is Razorpay. Configuration rejects Live Mode keys.
+
+- `GET /api/razorpay-test/runs` — connection readiness, public Test Key ID, and the 20 most recent provider-backed runs
+- `POST /api/razorpay-test/runs` with `{ "amount": 98900, "currency": "INR", "description": "..." }` — create an exact-value Razorpay Test Order for hosted Standard Checkout
+- `POST /api/razorpay-test/runs/:runId/verify` with Checkout's payment ID, order ID, and signature — verify the HMAC and authoritative payment state after success
+
+Failed Checkout attempts are never accepted from the browser. Only Razorpay's signed `payment.failed` webhook moves a run to `FAILURE_RECEIVED`; the worker then uses the webhook's trusted `order_id` to create the merchant Recovery Case. Successful payments are verified but intentionally do not create recovery cases.
+
 ## Local mock-mode demonstration
 
 These endpoints return 404 in production or Razorpay mode.

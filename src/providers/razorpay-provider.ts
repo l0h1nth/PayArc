@@ -1,4 +1,4 @@
-import type { CreatePaymentLinkInput, InvoiceRecord, OrderRecord, PaymentLinkRecord, PaymentRecord } from "../domain/types.js";
+import type { CheckoutOrderRecord, CreateCheckoutOrderInput, CreatePaymentLinkInput, InvoiceRecord, OrderRecord, PaymentLinkRecord, PaymentRecord } from "../domain/types.js";
 import type { PaymentProvider } from "./payment-provider.js";
 import { ProviderError } from "./payment-provider.js";
 
@@ -111,6 +111,25 @@ export class RazorpayProvider implements PaymentProvider {
   async fetchPayment(paymentId: string): Promise<PaymentRecord> {
     const data = await this.request(`/payments/${encodeURIComponent(paymentId)}`, { method: "GET" }, true) as Record<string, unknown>;
     return paymentFromApi(data);
+  }
+
+  async createCheckoutOrder(input: CreateCheckoutOrderInput): Promise<CheckoutOrderRecord> {
+    const data = await this.request("/orders", {
+      method: "POST",
+      body: JSON.stringify({
+        amount: input.amount,
+        currency: input.currency,
+        receipt: input.receipt,
+        notes: input.notes
+      })
+    }) as Record<string, unknown>;
+    return {
+      id: String(data.id),
+      amount: Number(data.amount),
+      currency: String(data.currency).toUpperCase(),
+      receipt: String(data.receipt),
+      status: String(data.status) as CheckoutOrderRecord["status"]
+    };
   }
 
   async fetchOrder(orderId: string): Promise<OrderRecord> {

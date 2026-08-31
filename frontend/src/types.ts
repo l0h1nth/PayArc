@@ -159,6 +159,27 @@ export type ScenarioRunSummary = {
   auditProofCount: number;
 };
 
+export type RazorpayTestRun = {
+  id: string;
+  providerOrderId: string;
+  amount: number;
+  currency: string;
+  description: string;
+  status: "CHECKOUT_READY" | "FAILURE_RECEIVED" | "PAYMENT_AUTHORIZED" | "PAYMENT_SUCCEEDED";
+  paymentId: string | null;
+  caseId: string | null;
+  caseStatus: RecoveryCase["status"] | null;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type RazorpayTestLab = {
+  available: boolean;
+  reason: string | null;
+  checkoutKeyId: string | null;
+  runs: RazorpayTestRun[];
+};
+
 export type ChannelReadiness = {
     maskedContact: string | null;
     contactSource: "PAYMENT" | "ORDER_PAYMENT" | "INVOICE" | null;

@@ -47,6 +47,30 @@ test("Razorpay adapter refuses live credentials", () => {
   assert.throws(() => new RazorpayProvider({ keyId: "rzp_live_key", keySecret: "secret", baseUrl: "https://api.razorpay.com/v1" }));
 });
 
+test("Razorpay adapter creates an exact-value checkout Order with a unique receipt", async () => {
+  let requestBody: Record<string, unknown> = {};
+  const provider = new RazorpayProvider({
+    keyId: "rzp_test_key", keySecret: "secret", baseUrl: "https://api.razorpay.com/v1",
+    fetchImpl: async (input, init) => {
+      assert.equal(String(input), "https://api.razorpay.com/v1/orders");
+      requestBody = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({
+        id: "order_test_checkout", amount: 98_900, currency: "INR",
+        receipt: "payarc_receipt", status: "created"
+      }), { status: 200 });
+    }
+  });
+  const order = await provider.createCheckoutOrder({
+    amount: 98_900, currency: "INR", receipt: "payarc_receipt",
+    notes: { payarc_test_run: "rtest_123" }
+  });
+  assert.equal(order.id, "order_test_checkout");
+  assert.deepEqual(requestBody, {
+    amount: 98_900, currency: "INR", receipt: "payarc_receipt",
+    notes: { payarc_test_run: "rtest_123" }
+  });
+});
+
 test("Razorpay adapter never serializes optional webhook customer data", async () => {
   let requestBody: Record<string, unknown> = {};
   const provider = new RazorpayProvider({

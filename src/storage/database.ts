@@ -67,6 +67,22 @@ export type ChannelDelivery = {
   updatedAt: number;
 };
 
+export type RazorpayTestRunStatus = "CHECKOUT_READY" | "FAILURE_RECEIVED" | "PAYMENT_AUTHORIZED" | "PAYMENT_SUCCEEDED";
+
+export type RazorpayTestRun = {
+  id: string;
+  providerOrderId: string;
+  amount: number;
+  currency: string;
+  description: string;
+  status: RazorpayTestRunStatus;
+  paymentId: string | null;
+  caseId: string | null;
+  caseStatus: RecoveryStatus | null;
+  createdAt: number;
+  updatedAt: number;
+};
+
 function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
@@ -126,6 +142,22 @@ function rowToAction(row: Record<string, unknown>): StoredAction {
     providerReference: nullableString(row.provider_reference),
     providerUrl: nullableString(row.provider_url),
     error: nullableString(row.error),
+    createdAt: Number(row.created_at),
+    updatedAt: Number(row.updated_at)
+  };
+}
+
+function rowToRazorpayTestRun(row: Record<string, unknown>, recoveryCase: RecoveryCase | null): RazorpayTestRun {
+  return {
+    id: String(row.id),
+    providerOrderId: String(row.provider_order_id),
+    amount: Number(row.amount),
+    currency: String(row.currency),
+    description: String(row.description),
+    status: String(row.status) as RazorpayTestRunStatus,
+    paymentId: nullableString(row.payment_id),
+    caseId: recoveryCase?.id ?? null,
+    caseStatus: recoveryCase?.status ?? null,
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at)
   };
@@ -255,6 +287,21 @@ export class RecoveryRepository {
         updated_at INTEGER NOT NULL,
         UNIQUE(action_id, channel)
       );
+
+      CREATE TABLE IF NOT EXISTS razorpay_test_runs (
+        id TEXT PRIMARY KEY,
+        provider_order_id TEXT NOT NULL UNIQUE,
+        amount INTEGER NOT NULL,
+        currency TEXT NOT NULL,
+        description TEXT NOT NULL,
+        status TEXT NOT NULL,
+        payment_id TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_razorpay_test_runs_updated
+        ON razorpay_test_runs(updated_at DESC);
 
       CREATE TABLE IF NOT EXISTS audit_log (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -459,6 +506,12 @@ export class RecoveryRepository {
       event.invoiceId ?? null, event.invoiceId ?? null,
       event.subscriptionId ?? null, event.subscriptionId ?? null
     ) as Record<string, unknown> | undefined;
+    return row ? rowToCase(row) : null;
+  }
+
+  findCaseByOrderId(orderId: string): RecoveryCase | null {
+    const row = this.db.prepare("SELECT * FROM recovery_cases WHERE order_id = ? ORDER BY updated_at DESC LIMIT 1")
+      .get(orderId) as Record<string, unknown> | undefined;
     return row ? rowToCase(row) : null;
   }
 
@@ -770,15 +823,70 @@ export class RecoveryRepository {
     return this.getChannelDelivery(input.actionId, input.channel)!;
   }
 
+  createRazorpayTestRun(input: {
+    id: string;
+    providerOrderId: string;
+    amount: number;
+    currency: string;
+    description: string;
+    now: number;
+  }): RazorpayTestRun {
+    this.db.prepare(`
+      INSERT INTO razorpay_test_runs
+        (id, provider_order_id, amount, currency, description, status, payment_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, 'CHECKOUT_READY', NULL, ?, ?)
+    `).run(input.id, input.providerOrderId, input.amount, input.currency, input.description, input.now, input.now);
+    return this.getRazorpayTestRun(input.id)!;
+  }
+
+  getRazorpayTestRun(id: string): RazorpayTestRun | null {
+    const row = this.db.prepare("SELECT * FROM razorpay_test_runs WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return rowToRazorpayTestRun(row, this.findCaseByOrderId(String(row.provider_order_id)));
+  }
+
+  listRazorpayTestRuns(limit = 20): RazorpayTestRun[] {
+    const rows = this.db.prepare("SELECT * FROM razorpay_test_runs ORDER BY created_at DESC LIMIT ?")
+      .all(limit) as Array<Record<string, unknown>>;
+    return rows.map((row) => rowToRazorpayTestRun(row, this.findCaseByOrderId(String(row.provider_order_id))));
+  }
+
+  observeRazorpayTestEvent(event: NormalizedEvent, now: number): void {
+    if (!event.orderId) return;
+    const row = this.db.prepare("SELECT status FROM razorpay_test_runs WHERE provider_order_id = ?")
+      .get(event.orderId) as { status: RazorpayTestRunStatus } | undefined;
+    if (!row) return;
+    let status = row.status;
+    if (event.type === "payment.failed" && !["PAYMENT_AUTHORIZED", "PAYMENT_SUCCEEDED"].includes(status)) status = "FAILURE_RECEIVED";
+    if (event.type === "payment.authorized" && status !== "PAYMENT_SUCCEEDED") status = "PAYMENT_AUTHORIZED";
+    if (event.type === "payment.captured" || event.type === "order.paid") status = "PAYMENT_SUCCEEDED";
+    this.db.prepare(`
+      UPDATE razorpay_test_runs
+      SET status = ?, payment_id = COALESCE(?, payment_id), updated_at = ?
+      WHERE provider_order_id = ?
+    `).run(status, event.paymentId ?? null, now, event.orderId);
+  }
+
+  markRazorpayTestRunVerified(id: string, paymentId: string, status: "PAYMENT_AUTHORIZED" | "PAYMENT_SUCCEEDED", now: number): RazorpayTestRun {
+    const result = this.db.prepare(`
+      UPDATE razorpay_test_runs
+      SET status = ?, payment_id = ?, updated_at = ?
+      WHERE id = ?
+    `).run(status, paymentId, now, id);
+    if (result.changes !== 1) throw new Error("Razorpay Test Run not found");
+    return this.getRazorpayTestRun(id)!;
+  }
+
   revision(): string {
     const row = this.db.prepare(`
       SELECT
         COALESCE((SELECT MAX(id) FROM audit_log), 0) audit_id,
         COALESCE((SELECT MAX(updated_at) FROM revenue_objects), 0) revenue_at,
         COALESCE((SELECT MAX(id) FROM revenue_operations), 0) operation_id,
-        COALESCE((SELECT MAX(updated_at) FROM channel_deliveries), 0) delivery_at
+        COALESCE((SELECT MAX(updated_at) FROM channel_deliveries), 0) delivery_at,
+        COALESCE((SELECT MAX(updated_at) FROM razorpay_test_runs), 0) test_run_at
     `).get() as Record<string, unknown>;
-    return `${row.audit_id}:${row.revenue_at}:${row.operation_id}:${row.delivery_at}`;
+    return `${row.audit_id}:${row.revenue_at}:${row.operation_id}:${row.delivery_at}:${row.test_run_at}`;
   }
 
   listAudit(caseId?: string): Array<Record<string, unknown>> {

@@ -13,7 +13,7 @@ import {
 import { api, type RealtimeState, type WhatsAppDelivery } from "./api";
 import type {
   Action, AuditEntry, CaseDetail, ChannelReadiness, DemoScenario, EventSummary, Metrics, PublicConfig,
-  RecoveryCase, ScenarioResult, ScenarioRunSummary, ViewId
+  RazorpayTestLab, RazorpayTestRun, RecoveryCase, ScenarioResult, ScenarioRunSummary, ViewId
 } from "./types";
 import type { RevenueSnapshot } from "./revenue-types";
 import { ConversationsView, IncidentsView, JourneysView, PortfolioView, ReceivablesView, SubscriptionsView } from "./RevenueViews";
@@ -74,8 +74,45 @@ type Snapshot = {
   events: EventSummary[];
   scenarios: DemoScenario[];
   scenarioRuns: ScenarioRunSummary[];
+  razorpayTestLab: RazorpayTestLab;
   revenue: RevenueSnapshot;
 };
+
+type RazorpayCheckoutSuccess = {
+  razorpay_payment_id: string;
+  razorpay_order_id: string;
+  razorpay_signature: string;
+};
+
+type RazorpayCheckoutInstance = {
+  open(): void;
+  on(event: "payment.failed", handler: (response: { error?: { description?: string } }) => void): void;
+};
+
+declare global {
+  interface Window {
+    Razorpay?: new (options: Record<string, unknown>) => RazorpayCheckoutInstance;
+  }
+}
+
+async function loadRazorpayCheckout(): Promise<void> {
+  if (window.Razorpay) return;
+  await new Promise<void>((resolve, reject) => {
+    const existing = document.querySelector<HTMLScriptElement>('script[src="https://checkout.razorpay.com/v1/checkout.js"]');
+    if (existing) {
+      existing.addEventListener("load", () => resolve(), { once: true });
+      existing.addEventListener("error", () => reject(new Error("Unable to load Razorpay Checkout")), { once: true });
+      return;
+    }
+    const script = document.createElement("script");
+    script.src = "https://checkout.razorpay.com/v1/checkout.js";
+    script.async = true;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error("Unable to load Razorpay Checkout"));
+    document.head.appendChild(script);
+  });
+  if (!window.Razorpay) throw new Error("Razorpay Checkout did not initialize");
+}
 
 function formatMoney(amount: number | null | undefined, currency = "INR") {
   return new Intl.NumberFormat("en-IN", { style: "currency", currency, maximumFractionDigits: 0 }).format((amount ?? 0) / 100);
@@ -265,18 +302,31 @@ function CasesView({ cases, onOpen }: { cases: RecoveryCase[]; onOpen: (id: stri
   return <section className="panel page-panel cases-panel"><div className="table-toolbar"><div className="segmented">{filters.map((item) => <button className={filter === item ? "active" : ""} onClick={() => setFilter(item)} key={item}>{humanize(item)}<span>{item === "ALL" ? cases.length : cases.filter((entry) => entry.status === item).length}</span></button>)}</div><label className="field-search"><Search size={15}/><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search case, payment, or failure"/></label></div><div className="table-meta"><span>{filtered.length} cases</span><span>Amounts shown in currency units</span></div><CasesTable cases={filtered} onOpen={onOpen}/></section>;
 }
 
-function ScenariosView({ scenarios, history, runningId, onRun, onInspect }: {
+function ScenariosView({ scenarios, history, testLab, runningId, realTestBusy, onRun, onInspect, onLaunchReal, onOpenCheckout, onOpenCase }: {
   scenarios: DemoScenario[];
   history: ScenarioRunSummary[];
+  testLab: RazorpayTestLab;
   runningId: string | null;
+  realTestBusy: boolean;
   onRun: (scenario: DemoScenario) => void;
   onInspect: (runId: string) => void;
+  onLaunchReal: (amount: number) => void;
+  onOpenCheckout: (run: RazorpayTestRun) => void;
+  onOpenCase: (caseId: string) => void;
 }) {
   const [category, setCategory] = useState("All");
+  const [amountRupees, setAmountRupees] = useState("989");
   const categories = ["All", ...new Set(scenarios.map((item) => item.category))];
   const filtered = category === "All" ? scenarios : scenarios.filter((item) => item.category === category);
+  const amountPaise = Math.round(Number(amountRupees) * 100);
   return <>
-    <div className="lab-banner panel"><div className="lab-icon"><TestTube2 /></div><div><span className="overline">Isolated test workspace</span><h3>Prove the complete recovery pipeline</h3><p>Fixtures use signed Razorpay-shaped events in a separate in-memory ledger. They never create real Payment Links or mix demo records into merchant data.</p></div><div className="lab-stats"><strong>{scenarios.length}</strong><span>executable flows</span></div></div>
+    <section className={`real-test-lab panel ${testLab.available ? "connected" : "unavailable"}`}>
+      <div className="real-test-main"><div className="real-test-heading"><div className="integration-logo razorpay-mark"><CreditCard/></div><div><span className="overline">Genuine provider proof</span><h2>Razorpay Test Mode Checkout</h2><p>Create a real Razorpay Order, choose <strong>Failure</strong> in hosted Checkout, and watch the signed webhook create a merchant Recovery Case automatically.</p></div><StatusPill status={testLab.available ? "CONNECTED" : "NOT_CONNECTED"}/></div>
+        {testLab.available ? <><div className="real-test-form"><label><span>Test amount</span><div><IndianRupee size={16}/><input inputMode="decimal" min="1" max="100000" value={amountRupees} onChange={(event) => setAmountRupees(event.target.value)} aria-label="Test amount in rupees"/></div></label><button disabled={realTestBusy || !Number.isFinite(amountPaise) || amountPaise < 100} onClick={() => onLaunchReal(amountPaise)}>{realTestBusy ? <><RefreshCw className="spin"/>Creating order…</> : <><ExternalLink/>Launch real test checkout</>}</button></div><div className="real-test-flow"><div><i>1</i><span><strong>Secure Order</strong>Server creates an exact-value Test Order.</span></div><ChevronRight/><div><i>2</i><span><strong>Select Failure</strong>Razorpay produces a real failed attempt.</span></div><ChevronRight/><div><i>3</i><span><strong>Signed webhook</strong>PayArc verifies and processes the event.</span></div><ChevronRight/><div><i>4</i><span><strong>Recovery Case</strong>The case appears in the merchant queue.</span></div></div></> : <div className="real-test-unavailable"><AlertTriangle/><div><strong>Razorpay Test Mode is not connected</strong><span>{testLab.reason}</span></div></div>}
+      </div>
+      <aside className="real-test-runs"><div className="section-row"><div><span className="overline">Provider-backed runs</span><h3>Recent checkout proofs</h3></div><span className="count-badge">{testLab.runs.length}</span></div>{testLab.runs.length ? <div>{testLab.runs.slice(0, 6).map((run) => <article key={run.id}><div className="run-status"><StatusPill status={run.caseStatus ?? run.status}/><time>{formatDate(run.createdAt)}</time></div><strong>{formatMoney(run.amount, run.currency)}</strong><code>{compactId(run.providerOrderId, 10)}</code><div className="run-actions">{run.caseId ? <button className="primary-link" onClick={() => onOpenCase(run.caseId!)}><WalletCards/>Open Recovery Case</button> : run.status === "FAILURE_RECEIVED" ? <span className="processing-note"><RefreshCw className="spin"/>Building case from webhook…</span> : run.status !== "PAYMENT_SUCCEEDED" ? <button onClick={() => onOpenCheckout(run)}><ExternalLink/>Open Checkout</button> : <span className="complete-note"><CheckCircle2/>Payment verified</span>}</div></article>)}</div> : <div className="real-test-empty"><Webhook/><span>No real checkout run yet.</span></div>}</aside>
+    </section>
+    <div className="lab-banner panel"><div className="lab-icon"><TestTube2 /></div><div><span className="overline">Controlled simulation suite</span><h3>Exercise conditions providers cannot expose on demand</h3><p>Outages, replay attacks, forged signatures and lifecycle edge cases stay in a separate ledger. They prove resilience without being presented as real Razorpay transactions.</p></div><div className="lab-stats"><strong>{scenarios.length}</strong><span>deterministic flows</span></div></div>
     <div className="category-tabs">{categories.map((item) => <button className={category === item ? "active" : ""} onClick={() => setCategory(item)} key={item}>{item}</button>)}</div>
     <div className="scenario-list panel">{filtered.map((scenario) => <article className="scenario-row" key={scenario.id}><div className={`scenario-icon accent-${scenario.accent}`}>{scenario.category === "Resilience & security" ? <ShieldCheck/> : scenario.category === "Subscriptions" ? <RefreshCw/> : scenario.category === "Recovery lifecycle" ? <TrendingUp/> : <CreditCard/>}</div><div className="scenario-copy"><strong>{scenario.title}</strong><span>{scenario.description}</span></div><div className="scenario-events"><span>Event flow</span><div>{scenario.events.map((event, index) => <code key={`${event}-${index}`}>{event}</code>)}</div></div><div className="scenario-expect"><span>Expected</span><strong>{scenario.expected}</strong></div><button disabled={Boolean(runningId)} onClick={() => onRun(scenario)}>{runningId === scenario.id ? <><RefreshCw className="spin" size={15}/>Running…</> : <><Play size={15}/>Run</>}</button></article>)}</div>
     {!scenarios.length && <div className="panel"><EmptyState icon={<FlaskConical/>} title="Scenario Lab unavailable" detail="Scenario fixtures are disabled in production."/></div>}
@@ -369,6 +419,7 @@ export function App() {
   const [selectedCase, setSelectedCase] = useState<CaseDetail | null>(null);
   const [drawerBusy, setDrawerBusy] = useState(false);
   const [runningId, setRunningId] = useState<string | null>(null);
+  const [realTestBusy, setRealTestBusy] = useState(false);
   const [scenarioResult, setScenarioResult] = useState<ScenarioResult | null>(null);
   const [scenarioTrace, setScenarioTrace] = useState<ScenarioResult | null>(null);
   const [toast, setToast] = useState<{ message: string; tone: "success" | "danger" } | null>(null);
@@ -394,7 +445,7 @@ export function App() {
     silent ? setRefreshing(true) : setLoading(true);
     try {
       const config = await api.config();
-      const [metrics, cases, audit, events, revenue] = await Promise.all([api.metrics(), api.cases(), api.audit(), api.events(), api.revenue()]);
+      const [metrics, cases, audit, events, revenue, razorpayTestLab] = await Promise.all([api.metrics(), api.cases(), api.audit(), api.events(), api.revenue(), api.razorpayTestRuns()]);
       let scenarios: DemoScenario[] = [];
       let scenarioRuns: ScenarioRunSummary[] = [];
       if (config.nodeEnv !== "production") {
@@ -402,7 +453,7 @@ export function App() {
         scenarios = catalog.scenarios;
         scenarioRuns = history.runs;
       }
-      setData({ config, metrics, cases, audit, events, scenarios, scenarioRuns, revenue });
+      setData({ config, metrics, cases, audit, events, scenarios, scenarioRuns, razorpayTestLab, revenue });
       setError(null);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Unable to load dashboard");
@@ -491,6 +542,58 @@ export function App() {
     catch (caught) { notify(caught instanceof Error ? caught.message : "Unable to load scenario trace", "danger"); }
   }, [notify]);
 
+  const openRazorpayTestCheckout = useCallback(async (run: RazorpayTestRun, keyOverride?: string) => {
+    const keyId = keyOverride ?? data?.razorpayTestLab.checkoutKeyId;
+    if (!keyId) { notify("Razorpay Test Mode checkout key is unavailable", "danger"); return; }
+    try {
+      await loadRazorpayCheckout();
+      const Checkout = window.Razorpay;
+      if (!Checkout) throw new Error("Razorpay Checkout did not initialize");
+      const checkout = new Checkout({
+        key: keyId,
+        amount: run.amount,
+        currency: run.currency,
+        name: "PayArc Test Merchant",
+        description: run.description,
+        order_id: run.providerOrderId,
+        prefill: { name: "Test Customer", email: "customer@example.test", contact: "+919000090000" },
+        notes: { payarc_test_run: run.id },
+        theme: { color: "#2368e8" },
+        retry: { enabled: true, max_count: 3 },
+        modal: { ondismiss: () => void reload(true) },
+        handler: async (response: RazorpayCheckoutSuccess) => {
+          try {
+            await api.verifyRazorpayTestRun(run.id, response.razorpay_payment_id, response.razorpay_order_id, response.razorpay_signature);
+            notify("Razorpay payment signature and provider state verified. Successful payments do not create recovery cases.");
+            await reload(true);
+          } catch (caught) {
+            notify(caught instanceof Error ? caught.message : "Unable to verify Razorpay payment", "danger");
+          }
+        }
+      });
+      checkout.on("payment.failed", (response) => {
+        notify(response.error?.description ? `Razorpay failure received: ${response.error.description}. Waiting for the signed webhook.` : "Razorpay failure received. Waiting for the signed webhook.");
+        window.setTimeout(() => void reload(true), 1_200);
+      });
+      checkout.open();
+    } catch (caught) {
+      notify(caught instanceof Error ? caught.message : "Unable to open Razorpay Checkout", "danger");
+    }
+  }, [data?.razorpayTestLab.checkoutKeyId, notify, reload]);
+
+  const launchRazorpayTest = useCallback(async (amount: number) => {
+    setRealTestBusy(true);
+    try {
+      const created = await api.createRazorpayTestRun(amount, "PayArc signed failure-to-recovery proof");
+      await reload(true);
+      await openRazorpayTestCheckout(created.run, created.checkoutKeyId);
+    } catch (caught) {
+      notify(caught instanceof Error ? caught.message : "Unable to create Razorpay Test Run", "danger");
+    } finally {
+      setRealTestBusy(false);
+    }
+  }, [notify, openRazorpayTestCheckout, reload]);
+
   const verifyAudit = useCallback(async () => {
     try { const result = await api.verifyAudit(); notify(result.valid ? `Audit chain valid: ${result.checked} records` : `Audit chain broken at record ${result.brokenAt}`, result.valid ? "success" : "danger"); await reload(true); }
     catch (caught) { notify(caught instanceof Error ? caught.message : "Verification failed", "danger"); }
@@ -530,7 +633,7 @@ export function App() {
     if (view === "receivables") content = <ReceivablesView items={data.revenue.receivables} busy={drawerBusy} mutate={revenueAction}/>;
     if (view === "conversations") content = <ConversationsView conversations={data.revenue.conversations} promises={data.revenue.promises} busy={drawerBusy} mutate={revenueAction}/>;
     if (view === "cases") content = <CasesView cases={data.cases} onOpen={openCase}/>;
-    if (view === "scenarios") content = <ScenariosView scenarios={data.scenarios} history={data.scenarioRuns} runningId={runningId} onRun={runScenario} onInspect={inspectScenarioRun}/>;
+    if (view === "scenarios") content = <ScenariosView scenarios={data.scenarios} history={data.scenarioRuns} testLab={data.razorpayTestLab} runningId={runningId} realTestBusy={realTestBusy} onRun={runScenario} onInspect={inspectScenarioRun} onLaunchReal={launchRazorpayTest} onOpenCheckout={openRazorpayTestCheckout} onOpenCase={openCase}/>;
     if (view === "events") content = <EventsView events={data.events} audit={data.audit}/>;
     if (view === "analytics") content = <AnalyticsView metrics={data.metrics}/>;
     if (view === "security") content = <SecurityView metrics={data.metrics} audit={data.audit} scenarios={data.scenarios} runningId={runningId} onRun={runScenario} onVerify={verifyAudit}/>;
