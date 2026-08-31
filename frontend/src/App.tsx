@@ -16,6 +16,7 @@ import type {
   RazorpayTestLab, RazorpayTestRun, RecoveryCase, ScenarioResult, ScenarioRunSummary, ViewId
 } from "./types";
 import type { RevenueSnapshot } from "./revenue-types";
+import { caseNotificationState, isNotifiableCase, notificationRevisionKey } from "./notifications";
 import { ConversationsView, IncidentsView, JourneysView, PortfolioView, ReceivablesView, SubscriptionsView } from "./RevenueViews";
 
 const viewTitles: Record<ViewId, { title: string; subtitle: string }> = {
@@ -92,6 +93,20 @@ type RazorpayCheckoutInstance = {
 declare global {
   interface Window {
     Razorpay?: new (options: Record<string, unknown>) => RazorpayCheckoutInstance;
+  }
+}
+
+const notificationStorageKey = "payarc:read-case-notifications";
+const maxStoredNotificationKeys = 500;
+
+function readStoredNotificationKeys(): Set<string> {
+  try {
+    const value: unknown = JSON.parse(window.localStorage.getItem(notificationStorageKey) ?? "[]");
+    return new Set(Array.isArray(value)
+      ? value.filter((item): item is string => typeof item === "string").slice(-maxStoredNotificationKeys)
+      : []);
+  } catch {
+    return new Set();
   }
 }
 
@@ -426,6 +441,15 @@ export function App() {
   const [operatorToken, setOperatorToken] = useState("");
   const [realtimeState, setRealtimeState] = useState<RealtimeState>("connecting");
   const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
+  const [readNotificationKeys, setReadNotificationKeys] = useState<Set<string>>(readStoredNotificationKeys);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(notificationStorageKey, JSON.stringify([...readNotificationKeys].slice(-maxStoredNotificationKeys)));
+    } catch {
+      // The dashboard remains usable when storage is disabled or full.
+    }
+  }, [readNotificationKeys]);
 
   const notify = useCallback((message: string, tone: "success" | "danger" = "success") => {
     setToast({ message, tone });
@@ -465,12 +489,31 @@ export function App() {
 
   useEffect(() => { void reload(); }, [reload]);
 
+  const markNotificationRead = useCallback((item: RecoveryCase) => {
+    if (!isNotifiableCase(item)) return;
+    const key = notificationRevisionKey(item);
+    setReadNotificationKeys((current) => {
+      if (current.has(key)) return current;
+      const next = new Set(current);
+      next.add(key);
+      while (next.size > maxStoredNotificationKeys) {
+        const oldest = next.values().next().value;
+        if (typeof oldest !== "string") break;
+        next.delete(oldest);
+      }
+      return next;
+    });
+  }, []);
+
   const openCase = useCallback(async (id: string, updateUrl = true) => {
+    const summary = data?.cases.find((item) => item.id === id);
     try {
-      setSelectedCase(await api.caseDetail(id));
+      const detail = await api.caseDetail(id);
+      setSelectedCase(detail);
+      if (summary) markNotificationRead(summary);
       if (updateUrl) writeRoute(view, id);
     } catch (caught) { notify(caught instanceof Error ? caught.message : "Unable to open case", "danger"); }
-  }, [notify, view]);
+  }, [data?.cases, markNotificationRead, notify, view]);
 
   const closeCase = useCallback(() => {
     setSelectedCase(null);
@@ -599,7 +642,23 @@ export function App() {
     catch (caught) { notify(caught instanceof Error ? caught.message : "Verification failed", "danger"); }
   }, [notify, reload]);
 
-  const notificationCases = data?.cases.filter((item) => ["ACTION_REQUIRED", "HUMAN_REVIEW", "PARTIALLY_RECOVERED"].includes(item.status)) ?? [];
+  const notifications = useMemo(
+    () => caseNotificationState(data?.cases ?? [], readNotificationKeys),
+    [data?.cases, readNotificationKeys]
+  );
+  const notificationCases = notifications.actionable;
+  const unreadNotificationCases = notifications.unread;
+  const unreadNotificationIds = useMemo(
+    () => new Set(unreadNotificationCases.map((item) => item.id)),
+    [unreadNotificationCases]
+  );
+  const markAllNotificationsRead = useCallback(() => {
+    setReadNotificationKeys((current) => {
+      const next = new Set(current);
+      for (const item of notifications.open) next.add(notificationRevisionKey(item));
+      return next;
+    });
+  }, [notifications.open]);
   const searchResults = useMemo(() => {
     if (!data || query.trim().length < 2) return [];
     const normalized = query.toLowerCase();
@@ -665,7 +724,7 @@ export function App() {
           <div className="topbar-controls">
             <button className="icon-button" title="Open operator guide" onClick={() => switchView("guide")}><BookOpen size={18}/></button>
             <button className="icon-button" title="Refresh dashboard" onClick={() => void reload(true)} disabled={refreshing}><RefreshCw size={18} className={refreshing ? "spin" : ""}/></button>
-            <div className="popover-wrap"><button className="icon-button" aria-label="Notifications" onClick={() => { setNotificationsOpen(!notificationsOpen); setAccountOpen(false); }}><Bell size={18}/>{notificationCases.length > 0 && <b className="notification-dot">{notificationCases.length}</b>}</button>{notificationsOpen && <div className="popover notifications"><div className="popover-head"><strong>Action centre</strong><span>{notificationCases.length} open</span></div>{notificationCases.slice(0, 6).map((item) => <button key={item.id} onClick={() => { void openCase(item.id); setNotificationsOpen(false); }}><AlertTriangle size={16}/><div><strong>{humanize(item.status)}</strong><span>{formatMoney(item.amount)} · {humanize(item.failureClass)}</span></div></button>)}{!notificationCases.length && <EmptyState icon={<CheckCircle2/>} title="You're all caught up" detail="No recovery alerts."/>}</div>}</div>
+            <div className="popover-wrap"><button className="icon-button" aria-label={`${unreadNotificationCases.length} unread notifications`} onClick={() => { setNotificationsOpen(!notificationsOpen); setAccountOpen(false); }}><Bell size={18}/>{unreadNotificationCases.length > 0 && <b className="notification-dot">{unreadNotificationCases.length}</b>}</button>{notificationsOpen && <div className="popover notifications"><div className="popover-head"><div><strong>Action centre</strong><span>{unreadNotificationCases.length} unread · {notificationCases.length} requiring action</span></div>{unreadNotificationCases.length > 0 && <button className="mark-read-button" onClick={markAllNotificationsRead}><Check size={14}/>Mark all read</button>}</div>{notifications.ordered.slice(0, 6).map((item) => <button className={unreadNotificationIds.has(item.id) ? "unread" : ""} key={item.id} onClick={() => { void openCase(item.id); setNotificationsOpen(false); }}><AlertTriangle size={16}/><div><strong>{humanize(item.status)}</strong><span>{formatMoney(item.amount)} · {humanize(item.failureClass)}</span></div></button>)}{!notifications.open.length && <EmptyState icon={<CheckCircle2/>} title="You're all caught up" detail="No recovery alerts."/>}</div>}</div>
             <div className="popover-wrap account-wrap"><button className="account-button" onClick={() => { setAccountOpen(!accountOpen); setNotificationsOpen(false); }}><div>M</div><span><strong>Merchant</strong><small>Merchant owner</small></span><ChevronDown size={14}/></button>{accountOpen && <div className="popover account-menu"><div><strong>Merchant</strong><span>merchant@payarc.test</span></div><button onClick={() => switchView("integrations")}><Server size={16}/>Runtime settings</button><button onClick={() => switchView("security")}><ShieldCheck size={16}/>Security controls</button></div>}</div>
           </div>
         </div>

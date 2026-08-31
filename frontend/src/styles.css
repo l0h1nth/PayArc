@@ -444,3 +444,17 @@ button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{ou
 .real-test-unavailable>div{display:grid;gap:4px}.real-test-unavailable span{font-size:11px;line-height:1.45}.real-test-unavailable svg{width:18px;flex:0 0 auto}
 @media(max-width:1180px){.real-test-lab{grid-template-columns:1fr}.real-test-runs{border-left:0;border-top:1px solid #dce5f3}.real-test-runs>div:last-child{grid-template-columns:repeat(2,minmax(0,1fr));max-height:none}}
 @media(max-width:760px){.real-test-main,.real-test-runs{padding:18px}.real-test-heading{grid-template-columns:42px 1fr}.real-test-heading>.status-pill{grid-column:2}.real-test-form{align-items:stretch;flex-direction:column}.real-test-form>label>div{width:100%}.real-test-form>button{justify-content:center}.real-test-flow{grid-template-columns:1fr}.real-test-flow>svg{display:none}.real-test-runs>div:last-child{grid-template-columns:1fr}}
+
+/* Notification counts distinguish unread updates from all unresolved cases. */
+.notifications{width:350px;padding:7px}
+.notifications .popover-head{min-height:59px;padding:9px 10px}
+.notifications .popover-head>div{display:grid;gap:3px}
+.notifications .popover-head>div>span{margin:0}
+.mark-read-button{border:0;border-radius:6px;background:#edf4ff;color:#2368e8;padding:7px 9px;display:flex;align-items:center;gap:5px;font-size:10px;font-weight:800}
+.mark-read-button:hover{background:#deebff}
+.notifications>button{position:relative;min-height:58px;padding:11px 12px}
+.notifications>button.unread{background:#f3f7ff}
+.notifications>button.unread:before{content:"";position:absolute;left:4px;top:50%;width:6px;height:6px;border-radius:50%;background:#2368e8;transform:translateY(-50%)}
+.notifications>button.unread:hover{background:#eaf2ff}
+.notifications>button:not(.unread){opacity:.72}
+.notifications>button:not(.unread)>svg{color:#8b95a8}
