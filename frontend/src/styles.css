@@ -458,3 +458,157 @@ button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{ou
 .notifications>button.unread:hover{background:#eaf2ff}
 .notifications>button:not(.unread){opacity:.72}
 .notifications>button:not(.unread)>svg{color:#8b95a8}
+
+/* Razorpay-inspired header bridge and persistent appearance controls. */
+.topbar{overflow:visible}
+.topbar-status{
+  position:absolute;
+  top:100%;
+  left:50%;
+  z-index:25;
+  height:38px;
+  padding:0 22px 9px;
+  border:0;
+  border-radius:0 0 28px 28px;
+  background:#08090b;
+  transform:translateX(-50%);
+  box-shadow:0 8px 16px rgba(8,9,11,.12);
+}
+.topbar-status:before,.topbar-status:after{
+  content:"";
+  position:absolute;
+  top:0;
+  width:24px;
+  height:24px;
+  pointer-events:none;
+}
+.topbar-status:before{right:100%;border-radius:0 18px 0 0;box-shadow:10px -10px 0 4px #08090b}
+.topbar-status:after{left:100%;border-radius:18px 0 0 0;box-shadow:-10px -10px 0 4px #08090b}
+.topbar .topbar-status .sync-badge,.topbar .topbar-status .env-badge{height:25px;padding-inline:9px;font-size:10px}
+.content{padding-top:52px}
+.sidebar-foot{display:grid;gap:3px;padding:10px 8px 0}
+.sidebar-foot .health-row{padding:8px 4px 7px}
+.sidebar-foot .trust-copy{padding:5px 4px}
+.theme-switch{
+  width:100%;
+  height:36px;
+  margin-top:5px;
+  padding:0 9px;
+  border:1px solid #dce2eb;
+  border-radius:8px;
+  background:#f6f8fb;
+  color:#657289;
+  display:flex;
+  align-items:center;
+  gap:7px;
+}
+.theme-switch:hover{border-color:#b8c5d8;background:#eef3fa}
+.theme-switch>svg{flex:0 0 auto;width:14px}
+.theme-switch>strong{margin-left:auto;color:#354157;font:700 10px Inter}
+.theme-track{position:relative;width:30px;height:17px;border-radius:10px;background:#c9d2df;transition:background .18s ease}
+.theme-track i{position:absolute;top:3px;left:3px;width:11px;height:11px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(15,24,40,.25);transition:transform .18s ease}
+.theme-switch[aria-pressed=true] .theme-track{background:#397be8}
+.theme-switch[aria-pressed=true] .theme-track i{transform:translateX(13px)}
+
+/* Dark mode preserves the information hierarchy while reducing glare. */
+html[data-theme="dark"]{
+  --line:#303948;
+  --muted:#94a0b4;
+  --blue-soft:#1c3150;
+  --green-soft:#153a2e;
+  --amber-soft:#46351b;
+  --red-soft:#452422;
+  --violet:#a894ef;
+  color-scheme:dark;
+}
+html[data-theme="dark"] body{background:#10151d;color:#e8edf5}
+html[data-theme="dark"] .sidebar{background:#151b25;color:#e8edf5;border-right-color:#303947}
+html[data-theme="dark"] .sidebar:after{background:#303947}
+html[data-theme="dark"] .sidebar-foot{background:#151b25;border-top-color:#303947}
+html[data-theme="dark"] .nav-group>span{color:#7f8ba0}
+html[data-theme="dark"] .nav-group button{color:#b7c1d0}
+html[data-theme="dark"] .nav-group button svg{color:#9ca9bd}
+html[data-theme="dark"] .nav-group button:hover{background:#202937;color:#fff}
+html[data-theme="dark"] .nav-group button.active{background:#243654;color:#8fbcff}
+html[data-theme="dark"] .nav-group button.active svg{color:#75aaff}
+html[data-theme="dark"] .health-row strong{color:#e7edf6}
+html[data-theme="dark"] .health-row span,html[data-theme="dark"] .trust-copy{color:#8491a5}
+html[data-theme="dark"] .theme-switch{border-color:#354052;background:#202834;color:#9eabc0}
+html[data-theme="dark"] .theme-switch:hover{border-color:#536176;background:#273141}
+html[data-theme="dark"] .theme-switch>strong{color:#e6ebf3}
+html[data-theme="dark"] .main-shell,html[data-theme="dark"] .content{background:#10151d}
+html[data-theme="dark"] .panel,
+html[data-theme="dark"] .metric-card,
+html[data-theme="dark"] .revenue-metric,
+html[data-theme="dark"] .autopilot-state,
+html[data-theme="dark"] .automation-strip,
+html[data-theme="dark"] .revenue-intro,
+html[data-theme="dark"] .incident-card,
+html[data-theme="dark"] .receivable-card,
+html[data-theme="dark"] .journey-card,
+html[data-theme="dark"] .recent-recoveries,
+html[data-theme="dark"] .action-centre,
+html[data-theme="dark"] .scenario-list,
+html[data-theme="dark"] .scenario-history,
+html[data-theme="dark"] .real-test-lab,
+html[data-theme="dark"] .integration-card,
+html[data-theme="dark"] .settings-card{background:#171e29;border-color:#303948;color:#e8edf5}
+html[data-theme="dark"] h1,html[data-theme="dark"] h2,html[data-theme="dark"] h3,html[data-theme="dark"] h4,
+html[data-theme="dark"] .merchant-page-head h2,html[data-theme="dark"] .primary-cell span,
+html[data-theme="dark"] .scenario-copy strong,html[data-theme="dark"] .scenario-expect strong{color:#edf2f8}
+html[data-theme="dark"] .merchant-page-head p,html[data-theme="dark"] .metric-label,
+html[data-theme="dark"] .metric-card small,html[data-theme="dark"] .scenario-copy span,
+html[data-theme="dark"] .panel-heading p{color:#9ba7b9}
+html[data-theme="dark"] .automation-strip>div>strong,html[data-theme="dark"] .queue-row strong{color:#e8edf5}
+html[data-theme="dark"] .automation-strip>button,
+html[data-theme="dark"] .segmented button,
+html[data-theme="dark"] .category-tabs button,
+html[data-theme="dark"] .field-search,
+html[data-theme="dark"] .inline-filters select,
+html[data-theme="dark"] .intro-actions button,
+html[data-theme="dark"] .card-actions .secondary-button{border-color:#354052;background:#202834;color:#d6deea}
+html[data-theme="dark"] input,html[data-theme="dark"] select{color:#e6ecf5;background:#202834}
+html[data-theme="dark"] input::placeholder{color:#78859a}
+html[data-theme="dark"] .cases-panel,html[data-theme="dark"] .cases-panel .table-toolbar{background:#171e29;border-color:#303948}
+html[data-theme="dark"] .cases-panel .table-toolbar{background:linear-gradient(100deg,#171e29,#1b2431)}
+html[data-theme="dark"] .cases-panel .segmented button{border-color:#354052;background:#1c2430;color:#aeb9c9}
+html[data-theme="dark"] .cases-panel .segmented button.active{border-color:#4d72ad;background:#203654;color:#9bc2ff}
+html[data-theme="dark"] .cases-panel .segmented button span{background:#293342;color:#aeb8c8}
+html[data-theme="dark"] .cases-panel .field-search{border-color:#354052;background:#202834}
+html[data-theme="dark"] .cases-panel .table-meta{border-color:#303948;background:#141b25;color:#8794a8}
+html[data-theme="dark"] .data-table th,html[data-theme="dark"] .responsive-table th,
+html[data-theme="dark"] .cases-panel .data-table th{border-color:#303948;background:#202936;color:#9da9bb}
+html[data-theme="dark"] .data-table td,html[data-theme="dark"] .responsive-table td,
+html[data-theme="dark"] .cases-panel .data-table td{border-color:#2b3442;color:#c3cddd}
+html[data-theme="dark"] .data-table tbody tr:hover,html[data-theme="dark"] .cases-panel .data-table tbody tr:hover,
+html[data-theme="dark"] .responsive-table tr.selected{background:#1d2b40;box-shadow:inset 3px 0 #4b8df8}
+html[data-theme="dark"] .primary-cell small{color:#8491a6}
+html[data-theme="dark"] .queue-row,html[data-theme="dark"] .scenario-history-list>button{border-color:#2f3846;background:#171e29;color:#dce3ed}
+html[data-theme="dark"] .queue-row:hover,html[data-theme="dark"] .scenario-row:hover,
+html[data-theme="dark"] .scenario-history-list>button:hover{background:#1d2735}
+html[data-theme="dark"] .failure-rate,html[data-theme="dark"] .expected-box,
+html[data-theme="dark"] .fact-grid>div,html[data-theme="dark"] .trace-case>div,
+html[data-theme="dark"] .result-comparison>div,html[data-theme="dark"] .structured-intent{border-color:#303948;background:#202834}
+html[data-theme="dark"] .scenario-events code,html[data-theme="dark"] .event-tags code,
+html[data-theme="dark"] .event-code,html[data-theme="dark"] .inline-facts span{background:#263243;color:#9fc0ec}
+html[data-theme="dark"] .real-test-runs,html[data-theme="dark"] .real-test-flow,
+html[data-theme="dark"] .lab-banner,html[data-theme="dark"] .scenario-history>.panel-heading{background:#1a2330;border-color:#303948}
+html[data-theme="dark"] .real-test-runs article{background:#202834;border-color:#364154}
+html[data-theme="dark"] .popover,html[data-theme="dark"] .search-results,
+html[data-theme="dark"] .case-drawer,html[data-theme="dark"] .drawer-head{background:#171e29;border-color:#303948;color:#e8edf5}
+html[data-theme="dark"] .notifications>button,html[data-theme="dark"] .account-menu button{background:#171e29;color:#dce3ed}
+html[data-theme="dark"] .notifications>button:hover,html[data-theme="dark"] .account-menu button:hover{background:#202a38}
+html[data-theme="dark"] .notifications>button.unread{background:#1d2d45}
+html[data-theme="dark"] .drawer-summary,html[data-theme="dark"] .trace-summary{background:#202834;border-color:#303948}
+html[data-theme="dark"] .drawer-section{border-color:#303948}
+html[data-theme="dark"] .decision-card,html[data-theme="dark"] .trace-actions article,
+html[data-theme="dark"] .trace-events,html[data-theme="dark"] .trace-empty{background:#1c2532;border-color:#344052}
+html[data-theme="dark"] .guide-hero,html[data-theme="dark"] .scenario-history>.panel-heading{background:linear-gradient(120deg,#171e29,#1c2737)}
+html[data-theme="dark"] .demo-steps>div,html[data-theme="dark"] .guide-grid>button{background:#1c2430;border-color:#303948;color:#dfe6f0}
+html[data-theme="dark"] .guide-grid>button:hover{background:#223047;border-color:#4b74b2}
+html[data-theme="dark"] .empty-icon{background:#232d3b;color:#93a9c7}
+html[data-theme="dark"] .progress,html[data-theme="dark"] .receivable-aging>div,html[data-theme="dark"] .confidence>div{background:#2a3442}
+
+@media(max-width:1320px){.topbar-status .sync-badge{display:inline-flex}.topbar-status{padding-right:22px}}
+@media(max-width:1060px){.topbar-status{display:none}.content{padding-top:30px}}
+@media(max-width:760px){.content{padding-top:20px}.theme-switch{height:38px}}

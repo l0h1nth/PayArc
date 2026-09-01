@@ -4,7 +4,7 @@ import {
   CheckCircle2, ChevronDown, ChevronRight, Circle, Clock3, Copy, CreditCard,
   BookOpen, Building2, ExternalLink, FileClock, FlaskConical, IndianRupee, LayoutDashboard,
   ListFilter, LockKeyhole, Menu, PanelLeftClose, Pause, Play, Radio, RefreshCw,
-  MessageSquareText, Network, Route, Search, Send, Server, ShieldCheck, TestTube2, TrendingUp, WalletCards, Webhook, X, Zap
+  MessageSquareText, Moon, Network, Route, Search, Send, Server, ShieldCheck, Sun, TestTube2, TrendingUp, WalletCards, Webhook, X, Zap
 } from "lucide-react";
 import {
   Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer,
@@ -446,6 +446,25 @@ export function App() {
   const [realtimeState, setRealtimeState] = useState<RealtimeState>("connecting");
   const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
   const [readNotificationKeys, setReadNotificationKeys] = useState<Set<string>>(readStoredNotificationKeys);
+  const [theme, setTheme] = useState<"light" | "dark">(() => {
+    try {
+      const stored = window.localStorage.getItem("payarc-theme");
+      if (stored === "light" || stored === "dark") return stored;
+    } catch {
+      // Fall back to the operating-system preference when storage is unavailable.
+    }
+    return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  });
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    document.documentElement.style.colorScheme = theme;
+    try {
+      window.localStorage.setItem("payarc-theme", theme);
+    } catch {
+      // Theme switching remains available for the current session.
+    }
+  }, [theme]);
 
   useEffect(() => {
     try {
@@ -705,7 +724,7 @@ export function App() {
   }
 
   return <div className="app-shell">
-    <aside className={`sidebar ${mobileNav ? "open" : ""}`}><div className="brand"><div className="brand-mark"><ShieldCheck/></div><div><strong>PayArc</strong><span>Revenue Control Plane</span></div><button className="mobile-close" onClick={() => setMobileNav(false)}><PanelLeftClose/></button></div><nav>{navGroups.map((group) => <div className="nav-group" key={group.label}><span>{group.label}</span>{group.items.map(([id, label, icon]) => <button className={view === id ? "active" : ""} onClick={() => switchView(id)} key={id}>{icon}<span>{label}</span>{id === "cases" && notificationCases.length > 0 && <b>{notificationCases.length}</b>}</button>)}</div>)}</nav><div className="sidebar-foot"><div className="health-row"><i className={error ? "down" : ""}/><div><strong>{error ? "Connection issue" : "All systems operational"}</strong><span>{data?.config.paymentProviderMode === "razorpay" ? "Razorpay Test Mode" : "Safe mock provider"}</span></div></div><div className="trust-copy"><LockKeyhole size={13}/> Zero-trust execution boundary</div></div></aside>
+    <aside className={`sidebar ${mobileNav ? "open" : ""}`}><div className="brand"><div className="brand-mark"><ShieldCheck/></div><div><strong>PayArc</strong><span>Revenue Control Plane</span></div><button className="mobile-close" onClick={() => setMobileNav(false)}><PanelLeftClose/></button></div><nav>{navGroups.map((group) => <div className="nav-group" key={group.label}><span>{group.label}</span>{group.items.map(([id, label, icon]) => <button className={view === id ? "active" : ""} onClick={() => switchView(id)} key={id}>{icon}<span>{label}</span>{id === "cases" && notificationCases.length > 0 && <b>{notificationCases.length}</b>}</button>)}</div>)}</nav><div className="sidebar-foot"><div className="health-row"><i className={error ? "down" : ""}/><div><strong>{error ? "Connection issue" : "All systems operational"}</strong><span>{data?.config.paymentProviderMode === "razorpay" ? "Razorpay Test Mode" : "Safe mock provider"}</span></div></div><div className="trust-copy"><LockKeyhole size={13}/> Zero-trust execution boundary</div><button className="theme-switch" type="button" onClick={() => setTheme((current) => current === "light" ? "dark" : "light")} aria-label={`Switch to ${theme === "light" ? "dark" : "light"} mode`} aria-pressed={theme === "dark"}><Sun size={14}/><span className="theme-track"><i/></span><Moon size={14}/><strong>{theme === "dark" ? "Dark" : "Light"}</strong></button></div></aside>
     {mobileNav && <div className="mobile-overlay" onClick={() => setMobileNav(false)}/>}
     <div className="main-shell">
       <header className="topbar">
