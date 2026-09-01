@@ -36,6 +36,10 @@ const envSchema = z.object({
   WORKER_BATCH_SIZE: z.coerce.number().int().min(1).max(1000).default(200),
   WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(50).default(10),
   WORKER_INTERVAL_MS: z.coerce.number().int().min(100).max(60_000).default(500),
+  AI_PROVIDER: z.enum(["auto", "deterministic", "groq", "openai"]).default("auto"),
+  GROQ_API_KEY: z.string().default(""),
+  GROQ_MODEL: z.string().default("openai/gpt-oss-20b"),
+  GROQ_BASE_URL: z.string().url().default("https://api.groq.com/openai/v1"),
   OPENAI_API_KEY: z.string().default(""),
   OPENAI_MODEL: z.string().default(""),
   OPENAI_BASE_URL: z.string().url().default("https://api.openai.com/v1"),
@@ -73,6 +77,13 @@ export type AppConfig = {
     controlCohortPercent: number;
     allowedCurrencies: Set<string>;
   };
+  aiProvider: "deterministic" | "groq" | "openai";
+  groq: {
+    apiKey: string;
+    model: string;
+    baseUrl: string;
+    enabled: boolean;
+  };
   openai: {
     apiKey: string;
     model: string;
@@ -98,6 +109,16 @@ export type AppConfig = {
 
 export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
   const env = envSchema.parse(source);
+  const aiProvider = env.AI_PROVIDER === "auto"
+    ? env.GROQ_API_KEY ? "groq" : env.OPENAI_API_KEY && env.OPENAI_MODEL ? "openai" : "deterministic"
+    : env.AI_PROVIDER;
+
+  if (aiProvider === "groq" && !env.GROQ_API_KEY) {
+    throw new Error("AI_PROVIDER=groq requires GROQ_API_KEY");
+  }
+  if (aiProvider === "openai" && (!env.OPENAI_API_KEY || !env.OPENAI_MODEL)) {
+    throw new Error("AI_PROVIDER=openai requires OPENAI_API_KEY and OPENAI_MODEL");
+  }
 
   if (env.PAYMENT_PROVIDER_MODE === "razorpay") {
     if (!env.RAZORPAY_KEY_ID.startsWith("rzp_test_")) {
@@ -148,11 +169,18 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
         env.ALLOWED_CURRENCIES.split(",").map((value) => value.trim().toUpperCase()).filter(Boolean)
       )
     },
+    aiProvider,
+    groq: {
+      apiKey: env.GROQ_API_KEY,
+      model: env.GROQ_MODEL,
+      baseUrl: env.GROQ_BASE_URL.replace(/\/$/, ""),
+      enabled: aiProvider === "groq"
+    },
     openai: {
       apiKey: env.OPENAI_API_KEY,
       model: env.OPENAI_MODEL,
       baseUrl: env.OPENAI_BASE_URL.replace(/\/$/, ""),
-      enabled: Boolean(env.OPENAI_API_KEY && env.OPENAI_MODEL)
+      enabled: aiProvider === "openai"
     },
     worker: {
       batchSize: env.WORKER_BATCH_SIZE,
@@ -184,7 +212,8 @@ export function publicConfig(config: AppConfig) {
     contactCooldownSeconds: config.policy.contactCooldownSeconds,
     controlCohortPercent: config.policy.controlCohortPercent,
     allowedCurrencies: [...config.policy.allowedCurrencies],
-    aiProvider: config.openai.enabled ? "openai" : "deterministic",
+    aiProvider: config.aiProvider,
+    aiModel: config.aiProvider === "groq" ? config.groq.model : config.aiProvider === "openai" ? config.openai.model : null,
     whatsappMode: config.whatsapp.mode,
     whatsappAutoSendEnabled: config.whatsapp.autoSendEnabled,
     workerBatchSize: config.worker.batchSize,

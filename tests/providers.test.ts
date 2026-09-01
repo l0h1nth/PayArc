@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { DeterministicDecisionProvider, FallbackDecisionProvider, OpenAIDecisionProvider } from "../src/providers/decision-provider.js";
+import { DeterministicDecisionProvider, FallbackDecisionProvider, GroqDecisionProvider, OpenAIDecisionProvider } from "../src/providers/decision-provider.js";
 import { RazorpayProvider } from "../src/providers/razorpay-provider.js";
 import { ClickToChatWhatsAppProvider, CloudApiWhatsAppProvider } from "../src/providers/whatsapp-provider.js";
 import type { DecisionInput } from "../src/domain/types.js";
@@ -151,6 +151,32 @@ test("OpenAI decision provider consumes strict structured output without tools",
   assert.ok(requestBody);
   assert.equal((requestBody as Record<string, unknown>).store, false);
   assert.equal("tools" in (requestBody as Record<string, unknown>), false);
+});
+
+test("Groq free-model provider consumes strict structured output without tools", async () => {
+  let requestUrl = "";
+  let requestBody: Record<string, unknown> | null = null;
+  const provider = new GroqDecisionProvider({
+    apiKey: "gsk_test", model: "openai/gpt-oss-20b", baseUrl: "https://api.groq.com/openai/v1",
+    fetchImpl: async (input, init) => {
+      requestUrl = String(input);
+      requestBody = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({
+        action: "SEND_RECOVERY_LINK", confidence: 0.93, reason: "Structured evidence supports a bounded retry",
+        delay_seconds: 900, requires_human_approval: false
+      }) } }] }), { status: 200 });
+    }
+  });
+  const result = await provider.decide(decisionInput);
+  assert.equal(result.provider, "groq");
+  assert.equal(result.action, "SEND_RECOVERY_LINK");
+  assert.equal(requestUrl, "https://api.groq.com/openai/v1/chat/completions");
+  assert.ok(requestBody);
+  assert.equal((requestBody as Record<string, unknown>).model, "openai/gpt-oss-20b");
+  assert.equal("tools" in (requestBody as Record<string, unknown>), false);
+  const format = (requestBody as { response_format: { type: string; json_schema: { strict: boolean } } }).response_format;
+  assert.equal(format.type, "json_schema");
+  assert.equal(format.json_schema.strict, true);
 });
 
 test("invalid AI output fails closed to deterministic decision", async () => {

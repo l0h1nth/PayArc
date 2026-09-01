@@ -8,6 +8,7 @@ import { systemClock, type Clock } from "./domain/types.js";
 import {
   DeterministicDecisionProvider,
   FallbackDecisionProvider,
+  GroqDecisionProvider,
   OpenAIDecisionProvider,
   type DecisionProvider
 } from "./providers/decision-provider.js";
@@ -65,13 +66,21 @@ export async function buildApplication(options: BuildOptions = {}): Promise<AppC
       })
     : new MockPaymentProvider());
   const deterministic = new DeterministicDecisionProvider();
-  const decisionProvider = options.decisionProvider ?? (config.openai.enabled
-    ? new FallbackDecisionProvider(new OpenAIDecisionProvider({
-        apiKey: config.openai.apiKey,
-        model: config.openai.model,
-        baseUrl: config.openai.baseUrl
-      }), deterministic)
-    : deterministic);
+  const configuredAI = config.aiProvider === "groq"
+    ? new GroqDecisionProvider({
+        apiKey: config.groq.apiKey,
+        model: config.groq.model,
+        baseUrl: config.groq.baseUrl
+      })
+    : config.aiProvider === "openai"
+      ? new OpenAIDecisionProvider({
+          apiKey: config.openai.apiKey,
+          model: config.openai.model,
+          baseUrl: config.openai.baseUrl
+        })
+      : null;
+  const decisionProvider = options.decisionProvider
+    ?? (configuredAI ? new FallbackDecisionProvider(configuredAI, deterministic) : deterministic);
   const whatsappProvider = options.whatsappProvider ?? (config.whatsapp.mode === "cloud_api"
     ? new CloudApiWhatsAppProvider({
         phoneNumberId: config.whatsapp.phoneNumberId,

@@ -22,7 +22,7 @@ This turns revenue recovery into a portfolio-level control problem: maximize *in
 - Payment/subscription/link webhook normalization
 - Hard/soft/merchant/risk failure classification
 - Treatment/control assignment and recovery-uplift metrics
-- Deterministic decision engine plus optional OpenAI strict structured-output adapter
+- Groq free-model and optional OpenAI strict structured-output decision adapters with deterministic fallback
 - Deterministic policy gate with contact caps, cooldown, opt-out, pause, approval, value threshold, currency allowlist, and kill switch
 - Real Razorpay Test Mode adapter for payment verification, subscription invoice lookup, Payment Link lookup/create/fetch/cancel
 - Partial/full/expired/cancelled outcome verification
@@ -117,16 +117,30 @@ Read-only connectivity smoke check:
 RAZORPAY_SMOKE_PAYMENT_ID=pay_... npm run smoke:razorpay
 ```
 
-## Optional AI provider
+## Free AI decision provider
 
-Without an AI key the project uses a deterministic and fully testable recovery decision engine. To add model reasoning:
+PayArc recommends Groq's free plan with `openai/gpt-oss-20b` for the hackathon. Groq currently documents strict JSON Schema output for this model and free-plan limits of 30 requests/minute and 1,000 requests/day. Create a key in the Groq Console, then set:
 
 ```dotenv
+AI_PROVIDER=groq
+GROQ_API_KEY=gsk_...
+GROQ_MODEL=openai/gpt-oss-20b
+GROQ_BASE_URL=https://api.groq.com/openai/v1
+```
+
+Restart the backend and verify that `/api/config` returns `"aiProvider":"groq"`. New cases will display `Groq` in their Recovery Decision Passport. Existing cases retain the provider that originally decided them.
+
+The Groq adapter sends only minimized structured failure features and requests strict JSON Schema output without tools. Every result is validated locally and re-authorized by deterministic policy. Timeout, rate-limit, invalid JSON, or schema failure falls back safely to the deterministic engine. [Groq structured outputs](https://console.groq.com/docs/structured-outputs) · [Groq free-plan limits](https://console.groq.com/docs/rate-limits)
+
+OpenAI remains available as an optional alternative:
+
+```dotenv
+AI_PROVIDER=openai
 OPENAI_API_KEY=...
 OPENAI_MODEL=<a structured-output model available to your account>
 ```
 
-The adapter sends only minimized structured failure features—never names, email, contact, free-text notes, amounts proposed by users, or API credentials. It uses the OpenAI Responses API with strict JSON Schema, no tools, and `store: false`. Every result is re-authorized by deterministic policy; invalid or unavailable model output falls back safely. [Official OpenAI Responses API](https://developers.openai.com/api/reference/cli/resources/responses/methods/create)
+Without either key, `AI_PROVIDER=auto` selects the fully testable deterministic engine. Never commit AI provider credentials.
 
 ## Verification
 

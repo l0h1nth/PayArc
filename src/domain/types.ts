@@ -121,7 +121,7 @@ export type RecoveryDecision = {
   reason: string;
   delaySeconds: number;
   requiresHumanApproval: boolean;
-  provider: "deterministic" | "openai";
+  provider: "deterministic" | "groq" | "openai";
 };
 
 export type PolicyDecision = {

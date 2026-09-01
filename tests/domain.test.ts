@@ -66,3 +66,11 @@ test("production configuration requires strong webhook and operator secrets", ()
   });
   assert.equal(config.nodeEnv, "production");
 });
+
+test("AI provider auto-selects Groq and explicit providers fail fast without credentials", () => {
+  const groq = loadConfig({ GROQ_API_KEY: "gsk_test" });
+  assert.equal(groq.aiProvider, "groq");
+  assert.equal(groq.groq.model, "openai/gpt-oss-20b");
+  assert.throws(() => loadConfig({ AI_PROVIDER: "groq" }), /GROQ_API_KEY/);
+  assert.throws(() => loadConfig({ AI_PROVIDER: "openai" }), /OPENAI_API_KEY/);
+});

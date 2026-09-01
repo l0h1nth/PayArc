@@ -12,6 +12,7 @@ export type PublicConfig = {
   controlCohortPercent: number;
   allowedCurrencies: string[];
   aiProvider: string;
+  aiModel: string | null;
   whatsappMode: "click_to_chat" | "cloud_api";
   whatsappAutoSendEnabled: boolean;
   workerBatchSize: number;
