@@ -217,13 +217,17 @@ export type StoredAction = {
   id: string;
   caseId: string;
   type: ActionType;
-  status: "PROPOSED" | "APPROVED" | "EXECUTING" | "SUCCEEDED" | "BLOCKED" | "FAILED" | "CANCELLED";
+  status: "PROPOSED" | "APPROVED" | "RETRY_SCHEDULED" | "EXECUTING" | "SUCCEEDED" | "BLOCKED" | "FAILED" | "CANCELLED";
   idempotencyKey: string;
   decision: RecoveryDecision;
   policy: PolicyDecision;
   providerReference: string | null;
   providerUrl: string | null;
   error: string | null;
+  attemptCount: number;
+  maxAttempts: number;
+  nextAttemptAt: number | null;
+  lastAttemptAt: number | null;
   createdAt: number;
   updatedAt: number;
 };

@@ -78,8 +78,13 @@ RAZORPAY_WEBHOOK_SECRET=...
 EXTERNAL_ACTIONS_ENABLED=true
 AUTO_ACTIONS_ENABLED=true
 WHATSAPP_AUTO_SEND_ENABLED=true
+ACTION_RETRY_MAX_ATTEMPTS=3
+ACTION_RETRY_BASE_SECONDS=30
+ACTION_RETRY_MAX_SECONDS=900
 OPERATOR_API_TOKEN=<at-least-32-random-characters-in-production>
 ```
+
+With autopilot enabled, the server worker continuously picks up signed failures, waits for the policy-selected cooldown, and executes eligible recovery actions without a merchant click. Transient Razorpay failures (network errors, rate limits, and 5xx responses) are retried with bounded exponential backoff. Invalid requests and other non-retryable failures stop immediately in Human Review. Recovery Cases show the persisted next-attempt countdown and attempt budget in real time; restarting the server does not lose the schedule.
 
 Configure the public HTTPS webhook URL as:
 

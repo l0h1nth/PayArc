@@ -103,7 +103,7 @@ export class RecoveryEngine {
     const concurrency = Math.min(this.config.worker.concurrency, jobs.length);
     await Promise.all(Array.from({ length: concurrency }, () => worker()));
     if (this.config.policy.autoActionsEnabled) {
-      const dueActions = this.repository.listDueApprovedActions(this.clock.now(), limit);
+      const dueActions = this.repository.listDueAutomatedActions(this.clock.now(), limit);
       await Promise.all(dueActions.map((action) => this.executeAction(action.id)));
     }
     return { claimed: jobs.length, completed, ignored, failed };
@@ -244,6 +244,8 @@ export class RecoveryEngine {
       idempotencyKey: idempotencyKey(recoveryCase, decision),
       decision,
       policy,
+      maxAttempts: this.config.worker.actionRetryMaxAttempts,
+      nextAttemptAt: actionStatus === "APPROVED" ? now + decision.delaySeconds : null,
       now
     });
 
@@ -403,24 +405,35 @@ export class RecoveryEngine {
     if (!freshPolicy.allowed) {
       return this.repository.updateAction(action.id, { status: "BLOCKED", error: freshPolicy.reasons.join("; ") }, "operator", this.clock.now());
     }
-    return this.repository.updateAction(action.id, { status: "APPROVED", error: null }, "operator", this.clock.now());
+    const now = this.clock.now();
+    return this.repository.updateAction(action.id, {
+      status: "APPROVED",
+      error: null,
+      nextAttemptAt: this.config.policy.autoActionsEnabled ? now + action.decision.delaySeconds : null
+    }, "operator", now);
   }
 
   async executeAction(actionId: string): Promise<StoredAction> {
     let action = this.repository.getAction(actionId);
     if (!action) throw new Error("Action not found");
     if (action.status === "SUCCEEDED") return action;
-    if (action.status !== "APPROVED" && action.status !== "EXECUTING" && action.status !== "FAILED") throw new Error(`Action cannot execute from ${action.status}`);
+    if (action.status !== "APPROVED" && action.status !== "RETRY_SCHEDULED" && action.status !== "EXECUTING" && action.status !== "FAILED") throw new Error(`Action cannot execute from ${action.status}`);
     let recoveryCase = this.repository.getCase(action.caseId);
     if (!recoveryCase) throw new Error("Recovery case not found");
     const now = this.clock.now();
     const freshPolicy = this.policy.evaluate(recoveryCase, action.decision, now);
-    if (!freshPolicy.allowed) return this.repository.updateAction(action.id, { status: "BLOCKED", error: freshPolicy.reasons.join("; ") }, "execution-policy", now);
+    if (!freshPolicy.allowed) return this.repository.updateAction(action.id, { status: "BLOCKED", error: freshPolicy.reasons.join("; "), nextAttemptAt: null }, "execution-policy", now);
     if (this.provider.mode === "razorpay" && !this.config.policy.externalActionsEnabled) {
-      return this.repository.updateAction(action.id, { status: "BLOCKED", error: "External actions are disabled" }, "execution-policy", now);
+      return this.repository.updateAction(action.id, { status: "BLOCKED", error: "External actions are disabled", nextAttemptAt: null }, "execution-policy", now);
     }
 
-    action = this.repository.updateAction(action.id, { status: "EXECUTING", error: null }, "executor", now);
+    action = this.repository.updateAction(action.id, {
+      status: "EXECUTING",
+      error: null,
+      attemptCount: action.attemptCount + 1,
+      nextAttemptAt: null,
+      lastAttemptAt: now
+    }, "executor", now);
     try {
       switch (action.type) {
         case "WAIT_FOR_PROVIDER_RETRY":
@@ -488,11 +501,38 @@ export class RecoveryEngine {
           break;
         }
       }
-      const succeeded = this.repository.updateAction(action.id, { status: "SUCCEEDED", error: null }, "executor", this.clock.now());
+      const succeeded = this.repository.updateAction(action.id, { status: "SUCCEEDED", error: null, nextAttemptAt: null }, "executor", this.clock.now());
       await this.actionSuccessHandler?.onActionSucceeded(succeeded.id);
       return succeeded;
     } catch (error) {
-      return this.repository.updateAction(action.id, { status: "FAILED", error: error instanceof Error ? error.message : "Execution failed" }, "executor", this.clock.now());
+      const failedAt = this.clock.now();
+      const message = error instanceof Error ? error.message : "Execution failed";
+      const retryable = error instanceof ProviderError && error.retryable;
+      if (retryable && this.config.policy.autoActionsEnabled && action.attemptCount < action.maxAttempts) {
+        const retryDelay = Math.min(
+          this.config.worker.actionRetryMaxSeconds,
+          this.config.worker.actionRetryBaseSeconds * 2 ** Math.max(0, action.attemptCount - 1)
+        );
+        const nextAttemptAt = failedAt + retryDelay;
+        const scheduled = this.repository.updateAction(action.id, {
+          status: "RETRY_SCHEDULED",
+          error: message,
+          nextAttemptAt
+        }, "recovery-autopilot", failedAt);
+        if (!isTerminal(recoveryCase.status)) {
+          recoveryCase = this.repository.saveCase({ ...recoveryCase, status: "WAITING", updatedAt: failedAt }, null,
+            "recovery-autopilot", `Retry ${action.attemptCount + 1} scheduled after a transient provider failure`, failedAt);
+        }
+        this.repository.appendAudit({ caseId: recoveryCase.id, actionId: action.id, kind: "ACTION_RETRY_SCHEDULED",
+          actor: "recovery-autopilot", data: { attempt: action.attemptCount, maxAttempts: action.maxAttempts, retryDelay, nextAttemptAt }, now: failedAt });
+        return scheduled;
+      }
+      const failed = this.repository.updateAction(action.id, { status: "FAILED", error: message, nextAttemptAt: null }, "executor", failedAt);
+      if (!isTerminal(recoveryCase.status)) {
+        this.repository.saveCase({ ...recoveryCase, status: "HUMAN_REVIEW", updatedAt: failedAt }, null,
+          "recovery-autopilot", retryable ? "Automatic retry budget exhausted" : "Execution failed with a non-retryable error", failedAt);
+      }
+      return failed;
     }
   }
 

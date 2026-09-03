@@ -4,7 +4,7 @@ import fastifyStatic from "@fastify/static";
 import Fastify, { type FastifyInstance } from "fastify";
 import { z } from "zod";
 import { type AppConfig, loadConfig, publicConfig } from "./config.js";
-import { systemClock, type Clock } from "./domain/types.js";
+import { systemClock, type Clock, type RecoveryCase, type StoredAction } from "./domain/types.js";
 import {
   DeterministicDecisionProvider,
   FallbackDecisionProvider,
@@ -52,6 +52,29 @@ export type BuildOptions = {
 
 function parseJsonBody<T>(value: unknown, schema: z.ZodType<T>): T {
   return schema.parse(value ?? {});
+}
+
+type PresentedCase = RecoveryCase & {
+  automation: null | Pick<StoredAction, "id" | "type" | "status" | "attemptCount" | "maxAttempts" | "nextAttemptAt" | "lastAttemptAt">;
+};
+
+function presentCases(repository: RecoveryRepository): PresentedCase[] {
+  const latestActions = new Map(repository.listLatestActionsByCase().map((action) => [action.caseId, action]));
+  return repository.listCases().map((recoveryCase) => {
+    const action = latestActions.get(recoveryCase.id);
+    return {
+      ...recoveryCase,
+      automation: action ? {
+        id: action.id,
+        type: action.type,
+        status: action.status,
+        attemptCount: action.attemptCount,
+        maxAttempts: action.maxAttempts,
+        nextAttemptAt: action.nextAttemptAt,
+        lastAttemptAt: action.lastAttemptAt
+      } : null
+    };
+  });
 }
 
 export async function buildApplication(options: BuildOptions = {}): Promise<AppContext> {
@@ -150,7 +173,7 @@ export async function buildApplication(options: BuildOptions = {}): Promise<AppC
     const limit = Math.min(500, Math.max(1, Number.parseInt(request.query.limit ?? "100", 10) || 100));
     return repository.listRevenueOperations(limit);
   });
-  app.get("/api/cases", async () => repository.listCases());
+  app.get("/api/cases", async () => presentCases(repository));
   app.get<{ Params: { id: string } }>("/api/cases/:id", async (request, reply) => {
     const recoveryCase = repository.getCase(request.params.id);
     if (!recoveryCase) return reply.code(404).send({ error: "Case not found" });

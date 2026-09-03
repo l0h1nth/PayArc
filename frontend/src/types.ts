@@ -17,6 +17,10 @@ export type PublicConfig = {
   whatsappAutoSendEnabled: boolean;
   workerBatchSize: number;
   workerConcurrency: number;
+  workerIntervalMs: number;
+  actionRetryMaxAttempts: number;
+  actionRetryBaseSeconds: number;
+  actionRetryMaxSeconds: number;
 };
 
 export type CohortMetric = {
@@ -69,6 +73,15 @@ export type RecoveryCase = {
   latestEventAt: number;
   createdAt: number;
   updatedAt: number;
+  automation?: {
+    id: string;
+    type: string;
+    status: string;
+    attemptCount: number;
+    maxAttempts: number;
+    nextAttemptAt: number | null;
+    lastAttemptAt: number | null;
+  } | null;
 };
 
 export type Decision = {
@@ -95,6 +108,12 @@ export type Action = {
   providerReference: string | null;
   providerUrl: string | null;
   error: string | null;
+  attemptCount: number;
+  maxAttempts: number;
+  nextAttemptAt: number | null;
+  lastAttemptAt: number | null;
+  createdAt: number;
+  updatedAt: number;
 };
 
 export type AuditEntry = {

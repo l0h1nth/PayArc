@@ -142,6 +142,10 @@ function rowToAction(row: Record<string, unknown>): StoredAction {
     providerReference: nullableString(row.provider_reference),
     providerUrl: nullableString(row.provider_url),
     error: nullableString(row.error),
+    attemptCount: Number(row.attempt_count ?? 0),
+    maxAttempts: Number(row.max_attempts ?? 3),
+    nextAttemptAt: row.next_attempt_at === null || row.next_attempt_at === undefined ? null : Number(row.next_attempt_at),
+    lastAttemptAt: row.last_attempt_at === null || row.last_attempt_at === undefined ? null : Number(row.last_attempt_at),
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at)
   };
@@ -266,6 +270,10 @@ export class RecoveryRepository {
         provider_reference TEXT,
         provider_url TEXT,
         error TEXT,
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        max_attempts INTEGER NOT NULL DEFAULT 3,
+        next_attempt_at INTEGER,
+        last_attempt_at INTEGER,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       );
@@ -352,6 +360,19 @@ export class RecoveryRepository {
         value_json TEXT NOT NULL,
         updated_at INTEGER NOT NULL
       );
+    `);
+
+    // Additive migrations keep existing local ledgers usable after an upgrade.
+    const actionColumns = new Set((this.db.prepare("PRAGMA table_info(actions)").all() as Array<{ name: string }>).map((column) => column.name));
+    if (!actionColumns.has("attempt_count")) this.db.exec("ALTER TABLE actions ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0");
+    if (!actionColumns.has("max_attempts")) this.db.exec("ALTER TABLE actions ADD COLUMN max_attempts INTEGER NOT NULL DEFAULT 3");
+    if (!actionColumns.has("next_attempt_at")) this.db.exec("ALTER TABLE actions ADD COLUMN next_attempt_at INTEGER");
+    if (!actionColumns.has("last_attempt_at")) this.db.exec("ALTER TABLE actions ADD COLUMN last_attempt_at INTEGER");
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_actions_due ON actions(status, next_attempt_at)");
+    this.db.exec(`
+      UPDATE actions
+      SET next_attempt_at = created_at + CAST(json_extract(decision_json, '$.delaySeconds') AS INTEGER)
+      WHERE status = 'APPROVED' AND next_attempt_at IS NULL
     `);
   }
 
@@ -585,6 +606,8 @@ export class RecoveryRepository {
     idempotencyKey: string;
     decision: RecoveryDecision;
     policy: PolicyDecision;
+    maxAttempts: number;
+    nextAttemptAt: number | null;
     now: number;
   }): StoredAction {
     return this.transaction(() => {
@@ -592,9 +615,11 @@ export class RecoveryRepository {
       if (existing) return rowToAction(existing);
       const id = `act_${randomUUID().replaceAll("-", "").slice(0, 20)}`;
       this.db.prepare(`
-        INSERT INTO actions (id, case_id, type, status, idempotency_key, decision_json, policy_json, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(id, input.caseId, input.type, input.status, input.idempotencyKey, JSON.stringify(input.decision), JSON.stringify(input.policy), input.now, input.now);
+        INSERT INTO actions
+          (id, case_id, type, status, idempotency_key, decision_json, policy_json,
+           attempt_count, max_attempts, next_attempt_at, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
+      `).run(id, input.caseId, input.type, input.status, input.idempotencyKey, JSON.stringify(input.decision), JSON.stringify(input.policy), input.maxAttempts, input.nextAttemptAt, input.now, input.now);
       this.appendAudit({ caseId: input.caseId, actionId: id, kind: "ACTION_CREATED", actor: "policy-engine", data: { type: input.type, status: input.status, reasons: input.policy.reasons }, now: input.now });
       return this.getAction(id)!;
     });
@@ -612,13 +637,24 @@ export class RecoveryRepository {
     return (rows as Array<Record<string, unknown>>).map(rowToAction);
   }
 
-  listDueApprovedActions(now: number, limit = 100): StoredAction[] {
+  listDueAutomatedActions(now: number, limit = 100): StoredAction[] {
     const rows = this.db.prepare(`
       SELECT * FROM actions
-      WHERE status = 'APPROVED'
-        AND created_at + CAST(json_extract(decision_json, '$.delaySeconds') AS INTEGER) <= ?
-      ORDER BY created_at ASC LIMIT ?
+      WHERE status IN ('APPROVED', 'RETRY_SCHEDULED')
+        AND COALESCE(next_attempt_at, created_at + CAST(json_extract(decision_json, '$.delaySeconds') AS INTEGER)) <= ?
+        AND attempt_count < max_attempts
+      ORDER BY COALESCE(next_attempt_at, created_at) ASC LIMIT ?
     `).all(now, limit) as Array<Record<string, unknown>>;
+    return rows.map(rowToAction);
+  }
+
+  listLatestActionsByCase(): StoredAction[] {
+    const rows = this.db.prepare(`
+      SELECT * FROM (
+        SELECT actions.*, ROW_NUMBER() OVER (PARTITION BY case_id ORDER BY created_at DESC, rowid DESC) position
+        FROM actions
+      ) WHERE position = 1
+    `).all() as Array<Record<string, unknown>>;
     return rows.map(rowToAction);
   }
 
@@ -632,17 +668,26 @@ export class RecoveryRepository {
     providerReference?: string | null;
     providerUrl?: string | null;
     error?: string | null;
+    attemptCount?: number;
+    maxAttempts?: number;
+    nextAttemptAt?: number | null;
+    lastAttemptAt?: number | null;
   }, actor: string, now: number): StoredAction {
     return this.transaction(() => {
       const current = this.getAction(id);
       if (!current) throw new Error(`Action not found: ${id}`);
       this.db.prepare(`
-        UPDATE actions SET status=?, provider_reference=?, provider_url=?, error=?, updated_at=? WHERE id=?
+        UPDATE actions SET status=?, provider_reference=?, provider_url=?, error=?, attempt_count=?,
+          max_attempts=?, next_attempt_at=?, last_attempt_at=?, updated_at=? WHERE id=?
       `).run(
         patch.status,
         patch.providerReference === undefined ? current.providerReference : patch.providerReference,
         patch.providerUrl === undefined ? current.providerUrl : patch.providerUrl,
         patch.error === undefined ? current.error : patch.error,
+        patch.attemptCount === undefined ? current.attemptCount : patch.attemptCount,
+        patch.maxAttempts === undefined ? current.maxAttempts : patch.maxAttempts,
+        patch.nextAttemptAt === undefined ? current.nextAttemptAt : patch.nextAttemptAt,
+        patch.lastAttemptAt === undefined ? current.lastAttemptAt : patch.lastAttemptAt,
         now,
         id
       );

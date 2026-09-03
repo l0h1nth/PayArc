@@ -36,6 +36,9 @@ const envSchema = z.object({
   WORKER_BATCH_SIZE: z.coerce.number().int().min(1).max(1000).default(200),
   WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(50).default(10),
   WORKER_INTERVAL_MS: z.coerce.number().int().min(100).max(60_000).default(500),
+  ACTION_RETRY_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(3),
+  ACTION_RETRY_BASE_SECONDS: z.coerce.number().int().min(1).max(86_400).default(30),
+  ACTION_RETRY_MAX_SECONDS: z.coerce.number().int().min(1).max(604_800).default(900),
   AI_PROVIDER: z.enum(["auto", "deterministic", "groq", "openai"]).default("auto"),
   GROQ_API_KEY: z.string().default(""),
   GROQ_MODEL: z.string().default("openai/gpt-oss-20b"),
@@ -94,6 +97,9 @@ export type AppConfig = {
     batchSize: number;
     concurrency: number;
     intervalMs: number;
+    actionRetryMaxAttempts: number;
+    actionRetryBaseSeconds: number;
+    actionRetryMaxSeconds: number;
   };
   whatsapp: {
     mode: "click_to_chat" | "cloud_api";
@@ -185,7 +191,10 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
     worker: {
       batchSize: env.WORKER_BATCH_SIZE,
       concurrency: env.WORKER_CONCURRENCY,
-      intervalMs: env.WORKER_INTERVAL_MS
+      intervalMs: env.WORKER_INTERVAL_MS,
+      actionRetryMaxAttempts: env.ACTION_RETRY_MAX_ATTEMPTS,
+      actionRetryBaseSeconds: env.ACTION_RETRY_BASE_SECONDS,
+      actionRetryMaxSeconds: env.ACTION_RETRY_MAX_SECONDS
     },
     whatsapp: {
       mode: env.WHATSAPP_MODE,
@@ -217,6 +226,10 @@ export function publicConfig(config: AppConfig) {
     whatsappMode: config.whatsapp.mode,
     whatsappAutoSendEnabled: config.whatsapp.autoSendEnabled,
     workerBatchSize: config.worker.batchSize,
-    workerConcurrency: config.worker.concurrency
+    workerConcurrency: config.worker.concurrency,
+    workerIntervalMs: config.worker.intervalMs,
+    actionRetryMaxAttempts: config.worker.actionRetryMaxAttempts,
+    actionRetryBaseSeconds: config.worker.actionRetryBaseSeconds,
+    actionRetryMaxSeconds: config.worker.actionRetryMaxSeconds
   };
 }

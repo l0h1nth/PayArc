@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { buildApplication, type AppContext } from "../src/app.js";
 import { MockPaymentProvider } from "../src/providers/mock-payment-provider.js";
+import { ProviderError } from "../src/providers/payment-provider.js";
 import type { WhatsAppProvider, WhatsAppRecoveryMessage } from "../src/providers/whatsapp-provider.js";
 import { signWebhook } from "../src/security/webhook.js";
 import { RecoveryRepository } from "../src/storage/database.js";
@@ -160,6 +161,53 @@ test("autopilot resolves the Razorpay order contact and sends one consented What
   await sendEvent(context, event, "evt_auto_channel");
   await context.engine.processPending();
   assert.equal(sent.length, 1, "Webhook replay and action idempotency must not duplicate the message");
+  await context.close();
+});
+
+test("autopilot persists a countdown and retries transient Payment Link failures without merchant input", async () => {
+  const context = await setup({
+    AUTO_ACTIONS_ENABLED: "true",
+    EXTERNAL_ACTIONS_ENABLED: "true",
+    ACTION_RETRY_MAX_ATTEMPTS: "3",
+    ACTION_RETRY_BASE_SECONDS: "5",
+    ACTION_RETRY_MAX_SECONDS: "20"
+  });
+  const event = failedPaymentEvent({ createdAt: context.clock.now() });
+  seedFailedPayment(context.provider, event);
+  await sendEvent(context, event, "evt_automatic_retry");
+  await context.engine.processPending();
+
+  let recoveryCase = context.repository.listCases()[0]!;
+  let action = context.repository.listActions(recoveryCase.id)[0]!;
+  assert.equal(action.status, "APPROVED");
+  assert.equal(action.attemptCount, 0);
+  assert.equal(action.nextAttemptAt, context.clock.now() + 900);
+
+  const scheduledResponse = await context.app.inject({ method: "GET", url: "/api/cases" });
+  assert.equal(scheduledResponse.json()[0].automation.nextAttemptAt, action.nextAttemptAt);
+
+  context.provider.failNextCreate = new ProviderError("Temporary Razorpay outage", 503, true);
+  context.clock.advance(900);
+  await context.engine.processPending();
+  action = context.repository.getAction(action.id)!;
+  recoveryCase = context.repository.getCase(recoveryCase.id)!;
+  assert.equal(action.status, "RETRY_SCHEDULED");
+  assert.equal(action.attemptCount, 1);
+  assert.equal(action.nextAttemptAt, context.clock.now() + 5);
+  assert.equal(recoveryCase.status, "WAITING");
+
+  context.clock.advance(4);
+  await context.engine.processPending();
+  assert.equal(context.repository.getAction(action.id)!.status, "RETRY_SCHEDULED");
+
+  context.clock.advance(1);
+  await context.engine.processPending();
+  action = context.repository.getAction(action.id)!;
+  assert.equal(action.status, "SUCCEEDED");
+  assert.equal(action.attemptCount, 2);
+  assert.equal(action.nextAttemptAt, null);
+  assert.equal(context.provider.links.size, 1);
+  assert.ok(context.repository.listAudit(recoveryCase.id).some((entry) => entry.kind === "ACTION_RETRY_SCHEDULED"));
   await context.close();
 });
 

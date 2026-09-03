@@ -153,10 +153,48 @@ function humanize(value: string | null | undefined) {
   return value ? value.toLowerCase().split("_").map((part) => part[0]?.toUpperCase() + part.slice(1)).join(" ") : "—";
 }
 
+function useEpochSecond() {
+  const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Math.floor(Date.now() / 1000)), 1_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  return now;
+}
+
+function countdown(target: number, now: number) {
+  const remaining = Math.max(0, target - now);
+  if (remaining === 0) return "due now";
+  const days = Math.floor(remaining / 86_400);
+  const hours = Math.floor((remaining % 86_400) / 3_600);
+  const minutes = Math.floor((remaining % 3_600) / 60);
+  const seconds = remaining % 60;
+  if (days) return `${days}d ${hours}h ${minutes}m`;
+  if (hours) return `${hours}h ${minutes}m ${seconds}s`;
+  return `${minutes}m ${seconds.toString().padStart(2, "0")}s`;
+}
+
+function AutomationTimer({ action, now, detailed = false }: {
+  action: RecoveryCase["automation"] | Action | null | undefined;
+  now: number;
+  detailed?: boolean;
+}) {
+  if (!action) return null;
+  const scheduled = ["APPROVED", "RETRY_SCHEDULED"].includes(action.status) && action.nextAttemptAt;
+  if (!scheduled && action.status !== "EXECUTING") return null;
+  const retryNumber = Math.min(action.attemptCount + 1, action.maxAttempts);
+  return <div className={`automation-timer ${action.status === "RETRY_SCHEDULED" ? "retry" : ""}`} title={scheduled ? `Scheduled for ${formatDate(action.nextAttemptAt)}` : "The worker is executing this action"}>
+    {action.status === "EXECUTING" ? <RefreshCw className="spin" size={13}/> : <Clock3 size={13}/>}<div>
+      <strong>{action.status === "EXECUTING" ? "Running automatically" : action.status === "RETRY_SCHEDULED" ? `Retry ${retryNumber} of ${action.maxAttempts}` : "Autopilot scheduled"}</strong>
+      <span>{action.status === "EXECUTING" ? "Provider request in progress" : `${detailed ? "Runs " : ""}${countdown(action.nextAttemptAt!, now)}`}</span>
+    </div>
+  </div>;
+}
+
 function statusTone(status: string) {
   if (["RECOVERED", "PROCESSED", "SUCCEEDED", "VALID"].includes(status)) return "success";
   if (["HUMAN_REVIEW", "EXHAUSTED", "FAILED", "BROKEN", "BLOCKED", "REJECTED"].includes(status)) return "danger";
-  if (["PARTIALLY_RECOVERED", "WAITING", "RETRYING", "PROPOSED"].includes(status)) return "warning";
+  if (["PARTIALLY_RECOVERED", "WAITING", "RETRYING", "RETRY_SCHEDULED", "PROPOSED"].includes(status)) return "warning";
   return "neutral";
 }
 
@@ -182,6 +220,7 @@ function MiniAudit({ entries, limit = 8 }: { entries: AuditEntry[]; limit?: numb
 }
 
 function CasesTable({ cases, onOpen, compact = false }: { cases: RecoveryCase[]; onOpen: (id: string) => void; compact?: boolean }) {
+  const now = useEpochSecond();
   if (!cases.length) return <EmptyState icon={<WalletCards />} title="No matching cases" detail="Run a scenario or change your filters." />;
   return <div className="table-scroll"><table className="data-table"><thead><tr>
     <th>Case</th><th>Status</th><th>Failure class</th>{!compact && <th>Cohort</th>}<th>At risk</th><th>Recovered</th><th>Decision</th><th></th>
@@ -192,7 +231,7 @@ function CasesTable({ cases, onOpen, compact = false }: { cases: RecoveryCase[];
     {!compact && <td><span className={`cohort ${item.cohort.toLowerCase()}`}>{item.cohort}</span></td>}
     <td className="amount">{formatMoney(item.amount, item.currency ?? "INR")}</td>
     <td className="amount recovered">{formatMoney(item.recoveredAmount, item.currency ?? "INR")}</td>
-    <td>{humanize(item.recommendedAction)}</td>
+    <td><div className="decision-cell"><span>{humanize(item.recommendedAction)}</span><AutomationTimer action={item.automation} now={now}/></div></td>
     <td><button className="icon-button subtle" aria-label={`Open ${item.id}`}><ChevronRight size={16} /></button></td>
   </tr>)}</tbody></table></div>;
 }
@@ -205,6 +244,7 @@ function CaseDrawer({ detail, providerMode, whatsappMode, busy, onClose, onActio
   onClose: () => void;
   onAction: (label: string, action: () => Promise<unknown>) => void;
 }) {
+  const now = useEpochSecond();
   const item = detail.case;
   const activeAction = detail.actions[0];
   const latestWhatsApp = detail.deliveries.find((delivery) => delivery.channel === "WHATSAPP");
@@ -269,10 +309,10 @@ function CaseDrawer({ detail, providerMode, whatsappMode, busy, onClose, onActio
       </div></section>
 
       <section className="drawer-section"><div className="section-row"><div><span className="innovation-label">PayArc innovation</span><h3>Recovery Decision Passport</h3></div>{activeAction && <StatusPill status={activeAction.status} />}</div>
-        {activeAction ? <><div className="decision-passport"><div><TrendingUp/><span>Causal proof</span><strong>{causalProof}</strong></div><div><Route/><span>Path conservation</span><strong>{pathDecision}</strong></div><div><ShieldCheck/><span>Safety envelope</span><strong>{safetyEnvelope}</strong></div></div><div className="decision-card"><div className="decision-title"><Bot size={18} /><strong>{humanize(activeAction.type)}</strong><span>{humanize(activeAction.decision.provider)} · {Math.round(activeAction.decision.confidence * 100)}%</span></div><p>{activeAction.decision.reason}</p><div className="policy-line"><ShieldCheck size={15} /><span>{activeAction.policy.allowed ? "Deterministic policy checks passed" : activeAction.policy.reasons.join("; ")}</span></div>{activeAction.error && <div className="action-error"><AlertTriangle size={15}/><span>{activeAction.error}</span></div>}{activeAction.providerUrl && <div className="provider-link"><a href={activeAction.providerUrl} target="_blank" rel="noreferrer">Open Razorpay Payment Link <ExternalLink size={13} /></a><button className="secondary-button" onClick={() => void navigator.clipboard.writeText(activeAction.providerUrl!)}><Copy size={13}/>Copy link</button></div>}</div></> : <EmptyState icon={<Bot />} title="No intervention" detail="This case has no active action." />}
+        {activeAction ? <><div className="decision-passport"><div><TrendingUp/><span>Causal proof</span><strong>{causalProof}</strong></div><div><Route/><span>Path conservation</span><strong>{pathDecision}</strong></div><div><ShieldCheck/><span>Safety envelope</span><strong>{safetyEnvelope}</strong></div></div><div className="decision-card"><div className="decision-title"><Bot size={18} /><strong>{humanize(activeAction.type)}</strong><span>{humanize(activeAction.decision.provider)} · {Math.round(activeAction.decision.confidence * 100)}%</span></div><p>{activeAction.decision.reason}</p><div className="policy-line"><ShieldCheck size={15} /><span>{activeAction.policy.allowed ? "Deterministic policy checks passed" : activeAction.policy.reasons.join("; ")}</span></div><AutomationTimer action={activeAction} now={now} detailed/>{activeAction.error && activeAction.status !== "RETRY_SCHEDULED" && <div className="action-error"><AlertTriangle size={15}/><span>{activeAction.error}</span></div>}{activeAction.status === "RETRY_SCHEDULED" && activeAction.error && <div className="retry-note"><AlertTriangle size={14}/><span>Last attempt: {activeAction.error}. PayArc will retry automatically.</span></div>}{activeAction.providerUrl && <div className="provider-link"><a href={activeAction.providerUrl} target="_blank" rel="noreferrer">Open Razorpay Payment Link <ExternalLink size={13} /></a><button className="secondary-button" onClick={() => void navigator.clipboard.writeText(activeAction.providerUrl!)}><Copy size={13}/>Copy link</button></div>}</div></> : <EmptyState icon={<Bot />} title="No intervention" detail="This case has no active action." />}
         <div className="action-grid">
           {activeAction?.status === "PROPOSED" && <button disabled={busy} onClick={() => onAction("Action approved", () => api.approve(activeAction.id))}><Check size={16} />Approve</button>}
-          {activeAction?.status === "APPROVED" && <button disabled={busy} onClick={() => onAction("Action executed", () => api.execute(activeAction.id))}><Zap size={16} />Execute</button>}
+          {["APPROVED", "RETRY_SCHEDULED"].includes(activeAction?.status ?? "") && <button disabled={busy} onClick={() => onAction("Action executed", () => api.execute(activeAction!.id))}><Zap size={16} />Run now</button>}
           {activeAction?.status === "FAILED" && <button disabled={busy} onClick={() => onAction("Execution retried", () => api.execute(activeAction.id))}><RefreshCw size={16} />Retry execution</button>}
           {activeAction?.status === "SUCCEEDED" && activeAction.providerReference && providerMode === "mock" && <><button disabled={busy} onClick={() => onAction("Full payment verified", () => api.pay(activeAction.id))}><CreditCard size={16} />Pay in full</button><button className="secondary-button" disabled={busy} onClick={() => onAction("Partial payment verified", () => api.pay(activeAction.id, Math.max(1, Math.floor((item.amount ?? 100) * .25))))}><IndianRupee size={16} />Pay 25%</button></>}
           {activeAction?.status === "SUCCEEDED" && activeAction.providerReference && providerMode === "razorpay" && <span className="awaiting-outcome"><Radio size={16}/>Awaiting signed Razorpay payment webhook</span>}
@@ -396,7 +436,7 @@ function IntegrationsView({ config }: { config: PublicConfig }) {
   const aiDetail = config.aiProvider === "deterministic"
     ? "No external model configured; safe deterministic recovery rules remain active."
     : `${config.aiModel ?? "Configured model"} receives only minimized failure features; deterministic policy owns amounts and execution.`;
-  return <><div className="integration-grid"><section className="panel integration-card"><div className="integration-logo razorpay-mark"><CreditCard/></div><div><span className="overline">Payment provider</span><h3>Razorpay {config.paymentProviderMode === "razorpay" ? "Test Mode" : "Mock Adapter"}</h3><p>{config.paymentProviderMode === "razorpay" ? "Connected to Razorpay test APIs. Live credentials are rejected by configuration." : "Safe local provider with Razorpay-compatible payment and Payment Link contracts."}</p></div><StatusPill status={config.paymentProviderMode === "razorpay" ? "CONNECTED" : "SANDBOX"}/></section><section className="panel integration-card"><div className="integration-logo ai-mark"><Bot/></div><div><span className="overline">Decision provider</span><h3>{aiName}</h3><p>{aiDetail}</p></div><StatusPill status={config.aiProvider === "deterministic" ? "LOCAL" : "CONNECTED"}/></section><section className="panel integration-card"><div className="integration-logo whatsapp-mark"><Send/></div><div><span className="overline">Recovery channel</span><h3>{config.whatsappMode === "cloud_api" ? "WhatsApp Cloud API" : "WhatsApp Click-to-Chat"}</h3><p>{config.whatsappMode === "cloud_api" ? "Resolves the trusted Razorpay contact and auto-sends an approved template when the order contains opt-in proof." : "Resolves the Razorpay contact and prepares the consented message automatically; Cloud API is required for unattended sending."}</p></div><StatusPill status={config.whatsappMode === "cloud_api" && config.whatsappAutoSendEnabled ? "AUTO_SEND" : config.whatsappAutoSendEnabled ? "AUTO_PREPARE" : "MANUAL"}/></section></div><div className="integration-layout"><section className="panel settings-panel"><div className="panel-heading"><div><span className="overline">Webhook endpoint</span><h3>Signed event ingress</h3></div></div><p>Configure this route in the Razorpay Test Mode dashboard using a public HTTPS host and a separate webhook secret.</p><div className="copy-field"><code>{webhookUrl}</code><button onClick={copy}>{copied ? <Check size={15}/> : <Copy size={15}/>}{copied ? "Copied" : "Copy"}</button></div><div className="check-list"><div><CheckCircle2/><span>Raw-body HMAC-SHA256 verification</span></div><div><CheckCircle2/><span>Current and previous secret rotation</span></div><div><CheckCircle2/><span>Atomic provider-event deduplication</span></div><div><CheckCircle2/><span>PII-redacted persistence</span></div></div></section><section className="panel settings-panel"><div className="panel-heading"><div><span className="overline">Runtime guardrails</span><h3>Execution policy</h3></div></div><div className="setting-list"><div><span>External actions</span><StatusPill status={config.externalActionsEnabled ? "ENABLED" : "DISABLED"}/></div><div><span>Low-risk autopilot</span><StatusPill status={config.autoActionsEnabled ? "ENABLED" : "APPROVAL_REQUIRED"}/></div><div><span>WhatsApp automation</span><StatusPill status={config.whatsappAutoSendEnabled ? "ENABLED" : "DISABLED"}/></div><div><span>Worker capacity</span><strong>{config.workerConcurrency} concurrent · {config.workerBatchSize}/batch</strong></div><div><span>Global kill switch</span><StatusPill status={config.globalKillSwitch ? "ENABLED" : "DISABLED"}/></div><div><span>Maximum automatic value</span><strong>{formatMoney(config.maxAutoAmountPaise)}</strong></div><div><span>Control cohort</span><strong>{config.controlCohortPercent}%</strong></div><div><span>Allowed currencies</span><strong>{config.allowedCurrencies.join(", ")}</strong></div></div></section></div><section className="panel events-matrix"><div className="panel-heading"><div><span className="overline">Event coverage</span><h3>Subscribed Razorpay lifecycle</h3></div><span className="count-badge">{supportedEvents.length}</span></div><div className="event-matrix-grid">{supportedEvents.map(([event, behavior]) => <div key={event}><Webhook size={16}/><div><code>{event}</code><span>{behavior}</span></div><CheckCircle2 size={16}/></div>)}</div></section></>;
+  return <><div className="integration-grid"><section className="panel integration-card"><div className="integration-logo razorpay-mark"><CreditCard/></div><div><span className="overline">Payment provider</span><h3>Razorpay {config.paymentProviderMode === "razorpay" ? "Test Mode" : "Mock Adapter"}</h3><p>{config.paymentProviderMode === "razorpay" ? "Connected to Razorpay test APIs. Live credentials are rejected by configuration." : "Safe local provider with Razorpay-compatible payment and Payment Link contracts."}</p></div><StatusPill status={config.paymentProviderMode === "razorpay" ? "CONNECTED" : "SANDBOX"}/></section><section className="panel integration-card"><div className="integration-logo ai-mark"><Bot/></div><div><span className="overline">Decision provider</span><h3>{aiName}</h3><p>{aiDetail}</p></div><StatusPill status={config.aiProvider === "deterministic" ? "LOCAL" : "CONNECTED"}/></section><section className="panel integration-card"><div className="integration-logo whatsapp-mark"><Send/></div><div><span className="overline">Recovery channel</span><h3>{config.whatsappMode === "cloud_api" ? "WhatsApp Cloud API" : "WhatsApp Click-to-Chat"}</h3><p>{config.whatsappMode === "cloud_api" ? "Resolves the trusted Razorpay contact and auto-sends an approved template when the order contains opt-in proof." : "Resolves the Razorpay contact and prepares the consented message automatically; Cloud API is required for unattended sending."}</p></div><StatusPill status={config.whatsappMode === "cloud_api" && config.whatsappAutoSendEnabled ? "AUTO_SEND" : config.whatsappAutoSendEnabled ? "AUTO_PREPARE" : "MANUAL"}/></section></div><div className="integration-layout"><section className="panel settings-panel"><div className="panel-heading"><div><span className="overline">Webhook endpoint</span><h3>Signed event ingress</h3></div></div><p>Configure this route in the Razorpay Test Mode dashboard using a public HTTPS host and a separate webhook secret.</p><div className="copy-field"><code>{webhookUrl}</code><button onClick={copy}>{copied ? <Check size={15}/> : <Copy size={15}/>}{copied ? "Copied" : "Copy"}</button></div><div className="check-list"><div><CheckCircle2/><span>Raw-body HMAC-SHA256 verification</span></div><div><CheckCircle2/><span>Current and previous secret rotation</span></div><div><CheckCircle2/><span>Atomic provider-event deduplication</span></div><div><CheckCircle2/><span>PII-redacted persistence</span></div></div></section><section className="panel settings-panel"><div className="panel-heading"><div><span className="overline">Runtime guardrails</span><h3>Execution policy</h3></div></div><div className="setting-list"><div><span>External actions</span><StatusPill status={config.externalActionsEnabled ? "ENABLED" : "DISABLED"}/></div><div><span>Low-risk autopilot</span><StatusPill status={config.autoActionsEnabled ? "ENABLED" : "APPROVAL_REQUIRED"}/></div><div><span>WhatsApp automation</span><StatusPill status={config.whatsappAutoSendEnabled ? "ENABLED" : "DISABLED"}/></div><div><span>Worker capacity</span><strong>{config.workerConcurrency} concurrent · {config.workerBatchSize}/batch</strong></div><div><span>Automatic retries</span><strong>{config.actionRetryMaxAttempts} attempts · {config.actionRetryBaseSeconds}s–{config.actionRetryMaxSeconds}s backoff</strong></div><div><span>Global kill switch</span><StatusPill status={config.globalKillSwitch ? "ENABLED" : "DISABLED"}/></div><div><span>Maximum automatic value</span><strong>{formatMoney(config.maxAutoAmountPaise)}</strong></div><div><span>Control cohort</span><strong>{config.controlCohortPercent}%</strong></div><div><span>Allowed currencies</span><strong>{config.allowedCurrencies.join(", ")}</strong></div></div></section></div><section className="panel events-matrix"><div className="panel-heading"><div><span className="overline">Event coverage</span><h3>Subscribed Razorpay lifecycle</h3></div><span className="count-badge">{supportedEvents.length}</span></div><div className="event-matrix-grid">{supportedEvents.map(([event, behavior]) => <div key={event}><Webhook size={16}/><div><code>{event}</code><span>{behavior}</span></div><CheckCircle2 size={16}/></div>)}</div></section></>;
 }
 
 function GuideView({ onView }: { onView: (view: ViewId) => void }) {
