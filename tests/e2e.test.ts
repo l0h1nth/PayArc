@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import test from "node:test";
 import { buildApplication, type AppContext } from "../src/app.js";
 import { MockPaymentProvider } from "../src/providers/mock-payment-provider.js";
@@ -98,7 +98,7 @@ test("consented WhatsApp recovery prepares a durable, PII-minimized channel deli
     method: "POST", url: `/api/actions/${action.id}/whatsapp`,
     payload: { consentConfirmed: true }
   });
-  assert.equal(response.statusCode, 200);
+  assert.equal(response.statusCode, 200, response.body);
   assert.match(response.json().deliveryUrl, /^https:\/\/wa\.me\/919000090000\?text=/);
   const stored = context.repository.getChannelDelivery(action.id, "WHATSAPP")!;
   assert.equal(stored.status, "PREPARED");
@@ -236,6 +236,102 @@ test("registered abandoned checkout is reused without creating a second Payment 
   assert.equal(action.providerUrl, "https://rzp.io/i/existing-valid-link");
   assert.equal(action.providerReference, null);
   assert.equal(context.provider.links.size, 0);
+  await context.close();
+});
+
+test("Smart Recovery Link remains stable while its Razorpay destination becomes ready", async () => {
+  const context = await setup({ PUBLIC_BASE_URL: "https://payarc.example" });
+  const event = failedPaymentEvent({ createdAt: context.clock.now() });
+  seedFailedPayment(context.provider, event);
+  await sendEvent(context, event, "evt_smart_session");
+  await context.engine.processPending();
+  const recoveryCase = context.repository.listCases()[0]!;
+  let action = context.repository.listActions(recoveryCase.id)[0]!;
+  const session = context.repository.getRecoverySessionByCase(recoveryCase.id)!;
+  assert.equal(session.status, "WAITING");
+  const waiting = await context.app.inject({ method: "GET", url: `/recover/${session.id}` });
+  assert.equal(waiting.statusCode, 200);
+  assert.match(waiting.body, /Preparing the safest payment route/);
+
+  context.engine.approveAction(action.id);
+  action = await context.engine.executeAction(action.id);
+  const ready = await context.app.inject({ method: "GET", url: `/recover/${session.id}` });
+  assert.equal(ready.statusCode, 200);
+  assert.match(ready.body, new RegExp(action.providerUrl!.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.equal(context.repository.getRecoverySession(session.id)!.openCount, 2);
+  assert.equal((await context.app.inject({ method: "GET", url: `/api/cases/${recoveryCase.id}` })).json().recoverySession.id, session.id);
+  await context.close();
+});
+
+test("three correlated provider failures engage a swarm breaker before retries execute", async () => {
+  const context = await setup({ AUTO_ACTIONS_ENABLED: "true", EXTERNAL_ACTIONS_ENABLED: "true" });
+  for (let index = 0; index < 3; index += 1) {
+    const event = failedPaymentEvent({ paymentId: `pay_swarm_${index}`, orderId: `order_swarm_${index}`, reason: "gateway_technical_error", source: "gateway", createdAt: context.clock.now() + index });
+    seedFailedPayment(context.provider, event);
+    await sendEvent(context, event, `evt_swarm_${index}`);
+  }
+  await context.engine.processPending();
+  const incident = context.revenueIntelligence.snapshot().incidents.find((item) => item.id.startsWith("inc_swarm_"))!;
+  assert.equal(incident.data.circuitBreaker, true);
+  assert.equal(incident.data.affectedCaseIds?.length, 3);
+  assert.equal(context.repository.listActions().filter((action) => action.status === "INCIDENT_HELD").length, 3);
+  assert.equal(context.provider.links.size, 0);
+  context.clock.advance(305);
+  assert.equal(context.revenueIntelligence.reconcileFailureSwarms(), 1);
+  assert.equal(context.repository.listActions().filter((action) => action.status === "APPROVED").length, 1);
+  assert.equal(context.repository.metrics().retriesPrevented, 3);
+  await context.close();
+});
+
+test("signed WhatsApp STOP reply automatically suppresses the matching recovery case", async () => {
+  const whatsappProvider: WhatsAppProvider = { mode: "CLOUD_API", async deliver() {
+    return { mode: "CLOUD_API", status: "SENT", deliveryUrl: null, providerReference: "wamid.intent" };
+  } };
+  const context = await setup({ AUTO_ACTIONS_ENABLED: "true", EXTERNAL_ACTIONS_ENABLED: "true", WHATSAPP_MODE: "cloud_api",
+    WHATSAPP_PHONE_NUMBER_ID: "phone_test", WHATSAPP_ACCESS_TOKEN: "token_test", WHATSAPP_AUTO_SEND_ENABLED: "true",
+    WHATSAPP_WEBHOOK_VERIFY_TOKEN: "verify_test", WHATSAPP_APP_SECRET: "app_secret_test" }, whatsappProvider);
+  const event = failedPaymentEvent({ createdAt: context.clock.now() });
+  seedFailedPayment(context.provider, event);
+  context.provider.seedOrder({ id: event.payload.payment.entity.order_id, notes: { payarc_whatsapp_opt_in: "true" } });
+  await sendEvent(context, event, "evt_whatsapp_intent");
+  await context.engine.processPending();
+  context.clock.advance(900);
+  await context.engine.processPending();
+  const recoveryCase = context.repository.listCases()[0]!;
+  const raw = JSON.stringify({ entry: [{ changes: [{ value: { messages: [{ id: "wamid.inbound_stop", from: "919000090000", text: { body: "STOP" } }] } }] }] });
+  const signature = `sha256=${createHmac("sha256", "app_secret_test").update(raw).digest("hex")}`;
+  const response = await context.app.inject({ method: "POST", url: "/webhooks/whatsapp", payload: raw,
+    headers: { "content-type": "application/json", "x-hub-signature-256": signature } });
+  assert.equal(response.statusCode, 200, response.body);
+  assert.equal(response.json().processed, 1);
+  assert.equal(context.repository.getCase(recoveryCase.id)!.status, "SUPPRESSED");
+  assert.ok(context.repository.listAudit(recoveryCase.id).some((entry) => entry.kind === "CUSTOMER_OPT_OUT_APPLIED"));
+  const duplicate = await context.app.inject({ method: "POST", url: "/webhooks/whatsapp", payload: raw,
+    headers: { "content-type": "application/json", "x-hub-signature-256": signature } });
+  assert.equal(duplicate.json().processed, 0);
+  await context.close();
+});
+
+test("customer-wide fatigue budget permits only one concurrent WhatsApp recovery", async () => {
+  let sent = 0;
+  const whatsappProvider: WhatsAppProvider = { mode: "CLOUD_API", async deliver() {
+    sent += 1;
+    return { mode: "CLOUD_API", status: "SENT", deliveryUrl: null, providerReference: `wamid.fatigue_${sent}` };
+  } };
+  const context = await setup({ AUTO_ACTIONS_ENABLED: "true", EXTERNAL_ACTIONS_ENABLED: "true", WHATSAPP_MODE: "cloud_api",
+    WHATSAPP_PHONE_NUMBER_ID: "phone_test", WHATSAPP_ACCESS_TOKEN: "token_test", WHATSAPP_AUTO_SEND_ENABLED: "true",
+    MAX_CONTACTS_PER_CUSTOMER: "1" }, whatsappProvider);
+  for (let index = 0; index < 2; index += 1) {
+    const event = failedPaymentEvent({ paymentId: `pay_fatigue_${index}`, orderId: `order_fatigue_${index}`, createdAt: context.clock.now() + index });
+    seedFailedPayment(context.provider, event);
+    context.provider.seedOrder({ id: event.payload.payment.entity.order_id, notes: { payarc_whatsapp_opt_in: "true" } });
+    await sendEvent(context, event, `evt_fatigue_${index}`);
+  }
+  await context.engine.processPending();
+  context.clock.advance(900);
+  await context.engine.processPending();
+  assert.equal(sent, 1);
+  assert.equal(context.repository.metrics().customerFatigueStops, 1);
   await context.close();
 });
 

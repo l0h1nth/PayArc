@@ -10,6 +10,7 @@ import type {
   NormalizedEvent,
   RecoveryCase,
   RecoveryDecision,
+  RecoverySession,
   RecoveryStatus,
   StoredAction,
   PolicyDecision
@@ -59,7 +60,7 @@ export type ChannelDelivery = {
   actionId: string;
   channel: "WHATSAPP";
   mode: "CLICK_TO_CHAT" | "CLOUD_API";
-  status: "PREPARED" | "SENT" | "FAILED";
+  status: "SENDING" | "PREPARED" | "SENT" | "FAILED";
   recipientHash: string;
   providerReference: string | null;
   error: string | null;
@@ -146,6 +147,21 @@ function rowToAction(row: Record<string, unknown>): StoredAction {
     maxAttempts: Number(row.max_attempts ?? 3),
     nextAttemptAt: row.next_attempt_at === null || row.next_attempt_at === undefined ? null : Number(row.next_attempt_at),
     lastAttemptAt: row.last_attempt_at === null || row.last_attempt_at === undefined ? null : Number(row.last_attempt_at),
+    createdAt: Number(row.created_at),
+    updatedAt: Number(row.updated_at)
+  };
+}
+
+function rowToRecoverySession(row: Record<string, unknown>): RecoverySession {
+  return {
+    id: String(row.id),
+    caseId: String(row.case_id),
+    status: String(row.status) as RecoverySession["status"],
+    destinationUrl: nullableString(row.destination_url),
+    preferredMethod: String(row.preferred_method) as RecoverySession["preferredMethod"],
+    expiresAt: Number(row.expires_at),
+    openCount: Number(row.open_count),
+    lastOpenedAt: row.last_opened_at === null ? null : Number(row.last_opened_at),
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at)
   };
@@ -282,6 +298,21 @@ export class RecoveryRepository {
       CREATE UNIQUE INDEX IF NOT EXISTS idx_actions_provider_reference
         ON actions(provider_reference) WHERE provider_reference IS NOT NULL;
 
+      CREATE TABLE IF NOT EXISTS recovery_sessions (
+        id TEXT PRIMARY KEY,
+        case_id TEXT NOT NULL UNIQUE REFERENCES recovery_cases(id),
+        status TEXT NOT NULL,
+        destination_url TEXT,
+        preferred_method TEXT NOT NULL DEFAULT 'AUTO',
+        expires_at INTEGER NOT NULL,
+        open_count INTEGER NOT NULL DEFAULT 0,
+        last_opened_at INTEGER,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_recovery_sessions_status ON recovery_sessions(status, expires_at);
+
       CREATE TABLE IF NOT EXISTS channel_deliveries (
         id TEXT PRIMARY KEY,
         action_id TEXT NOT NULL REFERENCES actions(id),
@@ -294,6 +325,11 @@ export class RecoveryRepository {
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
         UNIQUE(action_id, channel)
+      );
+
+      CREATE TABLE IF NOT EXISTS whatsapp_inbound_messages (
+        message_id TEXT PRIMARY KEY,
+        received_at INTEGER NOT NULL
       );
 
       CREATE TABLE IF NOT EXISTS razorpay_test_runs (
@@ -696,6 +732,65 @@ export class RecoveryRepository {
     });
   }
 
+  ensureRecoverySession(caseId: string, expiresAt: number, now: number): RecoverySession {
+    const current = this.getRecoverySessionByCase(caseId);
+    if (current) return current;
+    const id = `recover_${randomUUID().replaceAll("-", "")}`;
+    this.db.prepare(`
+      INSERT INTO recovery_sessions
+        (id, case_id, status, destination_url, preferred_method, expires_at, created_at, updated_at)
+      VALUES (?, ?, 'WAITING', NULL, 'AUTO', ?, ?, ?)
+    `).run(id, caseId, expiresAt, now, now);
+    this.appendAudit({ caseId, kind: "SMART_RECOVERY_SESSION_CREATED", actor: "recovery-autopilot",
+      data: { sessionId: id, expiresAt }, now });
+    return this.getRecoverySession(id)!;
+  }
+
+  getRecoverySession(id: string): RecoverySession | null {
+    const row = this.db.prepare("SELECT * FROM recovery_sessions WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+    return row ? rowToRecoverySession(row) : null;
+  }
+
+  getRecoverySessionByCase(caseId: string): RecoverySession | null {
+    const row = this.db.prepare("SELECT * FROM recovery_sessions WHERE case_id = ?").get(caseId) as Record<string, unknown> | undefined;
+    return row ? rowToRecoverySession(row) : null;
+  }
+
+  updateRecoverySession(id: string, patch: {
+    status?: RecoverySession["status"];
+    destinationUrl?: string | null;
+    preferredMethod?: RecoverySession["preferredMethod"];
+    expiresAt?: number;
+  }, actor: string, now: number): RecoverySession {
+    return this.transaction(() => {
+      const current = this.getRecoverySession(id);
+      if (!current) throw new Error("Recovery session not found");
+      this.db.prepare(`
+        UPDATE recovery_sessions SET status=?, destination_url=?, preferred_method=?, expires_at=?, updated_at=? WHERE id=?
+      `).run(
+        patch.status ?? current.status,
+        patch.destinationUrl === undefined ? current.destinationUrl : patch.destinationUrl,
+        patch.preferredMethod ?? current.preferredMethod,
+        patch.expiresAt ?? current.expiresAt,
+        now,
+        id
+      );
+      this.appendAudit({ caseId: current.caseId, kind: "SMART_RECOVERY_SESSION_UPDATED", actor,
+        data: { from: current.status, to: patch.status ?? current.status, preferredMethod: patch.preferredMethod ?? current.preferredMethod }, now });
+      return this.getRecoverySession(id)!;
+    });
+  }
+
+  recordRecoverySessionOpen(id: string, now: number): RecoverySession {
+    const current = this.getRecoverySession(id);
+    if (!current) throw new Error("Recovery session not found");
+    this.db.prepare("UPDATE recovery_sessions SET open_count=open_count+1, last_opened_at=?, updated_at=? WHERE id=?")
+      .run(now, now, id);
+    this.appendAudit({ caseId: current.caseId, kind: "SMART_RECOVERY_SESSION_OPENED", actor: "customer",
+      data: { sessionId: id, openNumber: current.openCount + 1 }, now });
+    return this.getRecoverySession(id)!;
+  }
+
   countRevenueObjects(): number {
     const row = this.db.prepare("SELECT COUNT(*) count FROM revenue_objects").get() as { count: number };
     return Number(row.count);
@@ -836,6 +931,47 @@ export class RecoveryRepository {
       recipientHash: String(row.recipient_hash), providerReference: nullableString(row.provider_reference),
       error: nullableString(row.error), createdAt: Number(row.created_at), updatedAt: Number(row.updated_at)
     };
+  }
+
+  countSentDeliveriesForRecipient(recipientHash: string, since: number): number {
+    const row = this.db.prepare(`
+      SELECT COUNT(*) count FROM channel_deliveries
+      WHERE recipient_hash = ? AND status = 'SENT' AND updated_at >= ?
+    `).get(recipientHash, since) as { count: number };
+    return Number(row.count);
+  }
+
+  reserveChannelDelivery(input: { actionId: string; mode: ChannelDelivery["mode"]; recipientHash: string; since: number; limit: number; now: number }): ChannelDelivery | null {
+    return this.transaction(() => {
+      const existing = this.getChannelDelivery(input.actionId, "WHATSAPP");
+      if (existing && existing.status !== "FAILED" && !(existing.status === "SENDING" && existing.updatedAt < input.now - 300)) return existing;
+      const row = this.db.prepare(`
+        SELECT COUNT(*) count FROM channel_deliveries
+        WHERE recipient_hash = ? AND ((status = 'SENT' AND updated_at >= ?) OR (status = 'SENDING' AND updated_at >= ?))
+      `).get(input.recipientHash, input.since, input.now - 300) as { count: number };
+      if (Number(row.count) >= input.limit) return null;
+      return this.saveChannelDelivery({ actionId: input.actionId, channel: "WHATSAPP", mode: input.mode,
+        status: "SENDING", recipientHash: input.recipientHash, providerReference: null, error: null, now: input.now });
+    });
+  }
+
+  findLatestDeliveryByRecipient(recipientHash: string): ChannelDelivery | null {
+    const row = this.db.prepare(`
+      SELECT * FROM channel_deliveries WHERE recipient_hash = ? ORDER BY updated_at DESC LIMIT 1
+    `).get(recipientHash) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return {
+      id: String(row.id), actionId: String(row.action_id), channel: "WHATSAPP",
+      mode: String(row.mode) as ChannelDelivery["mode"], status: String(row.status) as ChannelDelivery["status"],
+      recipientHash: String(row.recipient_hash), providerReference: nullableString(row.provider_reference),
+      error: nullableString(row.error), createdAt: Number(row.created_at), updatedAt: Number(row.updated_at)
+    };
+  }
+
+  claimWhatsAppInboundMessage(messageId: string, now: number): boolean {
+    const result = this.db.prepare("INSERT OR IGNORE INTO whatsapp_inbound_messages (message_id, received_at) VALUES (?, ?)")
+      .run(messageId, now);
+    return result.changes === 1;
   }
 
   listChannelDeliveries(caseId: string): ChannelDelivery[] {
@@ -1004,6 +1140,9 @@ export class RecoveryRepository {
       const items = cases.filter((item) => item.recommendedAction === intervention);
       return [String(intervention), cohortMetric(items)];
     }));
+    const sessionMetrics = this.db.prepare("SELECT COUNT(*) count, COALESCE(SUM(open_count), 0) opens FROM recovery_sessions").get() as { count: number; opens: number };
+    const retriesPrevented = this.db.prepare("SELECT COUNT(*) count FROM audit_log WHERE kind = 'INCIDENT_RETRY_HELD'").get() as { count: number };
+    const fatigueStops = this.db.prepare("SELECT COUNT(*) count FROM audit_log WHERE kind = 'WHATSAPP_DELIVERY_SKIPPED' AND json_extract(data_json, '$.reason') = 'CUSTOMER_FATIGUE_BUDGET_REACHED'").get() as { count: number };
     return {
       totalCases: cases.length,
       totalAtRisk: sum(cases, (item) => item.amount ?? 0),
@@ -1015,6 +1154,10 @@ export class RecoveryRepository {
       averageRecoverySeconds,
       byFailureClass,
       byIntervention,
+      smartRecoverySessions: Number(sessionMetrics.count),
+      smartSessionOpens: Number(sessionMetrics.opens),
+      retriesPrevented: Number(retriesPrevented.count),
+      customerFatigueStops: Number(fatigueStops.count),
       operations: Object.fromEntries(operationRows.map((row) => [row.kind, Number(row.count)])),
       audit: this.verifyAuditChain()
     };

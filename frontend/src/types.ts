@@ -3,11 +3,14 @@ export type ViewId = "overview" | "portfolio" | "incidents" | "journeys" | "subs
 export type PublicConfig = {
   nodeEnv: string;
   paymentProviderMode: "mock" | "razorpay";
+  publicBaseUrl: string;
   autoActionsEnabled: boolean;
   externalActionsEnabled: boolean;
   globalKillSwitch: boolean;
   maxAutoAmountPaise: number;
   maxContactsPerCase: number;
+  maxContactsPerCustomer: number;
+  customerContactWindowSeconds: number;
   contactCooldownSeconds: number;
   controlCohortPercent: number;
   allowedCurrencies: string[];
@@ -15,6 +18,7 @@ export type PublicConfig = {
   aiModel: string | null;
   whatsappMode: "click_to_chat" | "cloud_api";
   whatsappAutoSendEnabled: boolean;
+  whatsappInboundEnabled: boolean;
   workerBatchSize: number;
   workerConcurrency: number;
   workerIntervalMs: number;
@@ -41,6 +45,10 @@ export type Metrics = {
   averageRecoverySeconds: number | null;
   byFailureClass: Record<string, CohortMetric>;
   byIntervention: Record<string, CohortMetric>;
+  smartRecoverySessions: number;
+  smartSessionOpens: number;
+  retriesPrevented: number;
+  customerFatigueStops: number;
   operations: Record<string, number>;
   audit: { valid: boolean; checked: number; brokenAt: number | null };
 };
@@ -91,6 +99,14 @@ export type Decision = {
   delaySeconds: number;
   requiresHumanApproval: boolean;
   provider: string;
+  counterfactual?: {
+    rejectedAction: string;
+    interventionRecoveryProbability: number;
+    naturalRecoveryProbability: number;
+    expectedIncrementalValue: number;
+    reason: string;
+    estimated: true;
+  };
 };
 
 export type Action = {
@@ -214,12 +230,24 @@ export type ChannelReadiness = {
 export type CaseDetail = {
   case: RecoveryCase;
   actions: Action[];
+  recoverySession: null | {
+    id: string;
+    caseId: string;
+    status: "WAITING" | "READY" | "PAID" | "CLOSED" | "EXPIRED";
+    destinationUrl: string | null;
+    preferredMethod: "AUTO" | "UPI";
+    expiresAt: number;
+    openCount: number;
+    lastOpenedAt: number | null;
+    createdAt: number;
+    updatedAt: number;
+  };
   deliveries: Array<{
     id: string;
     actionId: string;
     channel: "WHATSAPP";
     mode: "CLICK_TO_CHAT" | "CLOUD_API";
-    status: "PREPARED" | "SENT" | "FAILED";
+    status: "SENDING" | "PREPARED" | "SENT" | "FAILED";
     providerReference: string | null;
     error: string | null;
     createdAt: number;

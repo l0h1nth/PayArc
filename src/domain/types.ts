@@ -122,6 +122,14 @@ export type RecoveryDecision = {
   delaySeconds: number;
   requiresHumanApproval: boolean;
   provider: "deterministic" | "groq" | "openai";
+  counterfactual?: {
+    rejectedAction: string;
+    interventionRecoveryProbability: number;
+    naturalRecoveryProbability: number;
+    expectedIncrementalValue: number;
+    reason: string;
+    estimated: true;
+  };
 };
 
 export type PolicyDecision = {
@@ -217,7 +225,7 @@ export type StoredAction = {
   id: string;
   caseId: string;
   type: ActionType;
-  status: "PROPOSED" | "APPROVED" | "RETRY_SCHEDULED" | "EXECUTING" | "SUCCEEDED" | "BLOCKED" | "FAILED" | "CANCELLED";
+  status: "PROPOSED" | "APPROVED" | "RETRY_SCHEDULED" | "INCIDENT_HELD" | "EXECUTING" | "SUCCEEDED" | "BLOCKED" | "FAILED" | "CANCELLED";
   idempotencyKey: string;
   decision: RecoveryDecision;
   policy: PolicyDecision;
@@ -228,6 +236,19 @@ export type StoredAction = {
   maxAttempts: number;
   nextAttemptAt: number | null;
   lastAttemptAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type RecoverySession = {
+  id: string;
+  caseId: string;
+  status: "WAITING" | "READY" | "PAID" | "CLOSED" | "EXPIRED";
+  destinationUrl: string | null;
+  preferredMethod: "AUTO" | "UPI";
+  expiresAt: number;
+  openCount: number;
+  lastOpenedAt: number | null;
   createdAt: number;
   updatedAt: number;
 };

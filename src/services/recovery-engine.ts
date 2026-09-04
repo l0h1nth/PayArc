@@ -54,6 +54,21 @@ function idempotencyKey(recoveryCase: RecoveryCase, decision: RecoveryDecision):
     .digest("hex");
 }
 
+function addCounterfactual(decision: RecoveryDecision, recoveryCase: RecoveryCase): RecoveryDecision {
+  const probabilities: Record<RecoveryCase["failureClass"], [number, number, string, string]> = {
+    TRANSIENT_PROVIDER: [.62, .35, "IMMEDIATE_SAME_RAIL_RETRY", "Waiting for provider health avoids a retry storm while preserving likely recovery"],
+    CUSTOMER_ACTIONABLE: [.58, .24, "DO_NOTHING", "A bounded alternate path has higher expected recovery than passive abandonment"],
+    PAYMENT_METHOD_INVALID: [.53, .18, "RETRY_INVALID_METHOD", "Requesting a valid method avoids repeating a structurally impossible charge"],
+    MERCHANT_CONFIGURATION: [.12, .10, "CONTACT_CUSTOMER", "Merchant-side faults should be fixed before disturbing the customer"],
+    RISK_OR_COMPLIANCE: [.08, .07, "AUTOMATED_RETRY", "Compliance evidence requires human review; automated collection is unsafe"],
+    UNKNOWN: [.20, .16, "AGGRESSIVE_OUTREACH", "Uncertain evidence is deliberately routed to a conservative path"]
+  };
+  const [interventionRecoveryProbability, naturalRecoveryProbability, rejectedAction, reason] = probabilities[recoveryCase.failureClass];
+  return { ...decision, counterfactual: { rejectedAction, interventionRecoveryProbability, naturalRecoveryProbability,
+    expectedIncrementalValue: Math.max(0, Math.round((recoveryCase.amount ?? 0) * (interventionRecoveryProbability - naturalRecoveryProbability))),
+    reason, estimated: true } };
+}
+
 export class RecoveryEngine {
   private readonly policy: PolicyEngine;
 
@@ -63,7 +78,10 @@ export class RecoveryEngine {
     private readonly decisionProvider: DecisionProvider,
     private readonly config: AppConfig,
     private readonly clock: Clock,
-    private readonly actionSuccessHandler?: { onActionSucceeded(actionId: string): Promise<void> }
+    private readonly actionCoordinator?: {
+      onFailureObserved?(event: NormalizedEvent, recoveryCase: RecoveryCase, action: StoredAction): void;
+      onActionSucceeded(actionId: string): Promise<void>;
+    }
   ) {
     this.policy = new PolicyEngine(config.policy);
   }
@@ -221,6 +239,7 @@ export class RecoveryEngine {
         };
       }
     }
+    decision = addCounterfactual(decision, recoveryCase);
     const policy = this.policy.evaluate(recoveryCase, decision, now);
     const scheduled = policy.allowed && !policy.requiresApproval && this.config.policy.autoActionsEnabled && decision.delaySeconds > 0;
     const nextStatus = policy.allowed ? scheduled ? "WAITING" : targetStatus(decision) : "HUMAN_REVIEW";
@@ -248,14 +267,23 @@ export class RecoveryEngine {
       nextAttemptAt: actionStatus === "APPROVED" ? now + decision.delaySeconds : null,
       now
     });
+    if (policy.allowed && ["SEND_RECOVERY_LINK", "REUSE_EXISTING_CHECKOUT"].includes(action.type)) {
+      this.repository.ensureRecoverySession(
+        recoveryCase.id,
+        policy.authoritative.expiresAt ?? now + this.config.policy.paymentLinkTtlSeconds,
+        now
+      );
+    }
+    this.actionCoordinator?.onFailureObserved?.(enriched, recoveryCase, action);
+    const coordinatedAction = this.repository.getAction(action.id)!;
 
-    if (scheduled) {
+    if (scheduled && coordinatedAction.status === "APPROVED") {
       this.repository.appendAudit({ caseId: recoveryCase.id, actionId: action.id, kind: "ACTION_SCHEDULED",
         actor: "recovery-autopilot", data: { executeAt: now + decision.delaySeconds, delaySeconds: decision.delaySeconds }, now });
     }
 
-    if (action.status === "APPROVED" && this.config.policy.autoActionsEnabled && decision.delaySeconds === 0) {
-      await this.executeAction(action.id);
+    if (coordinatedAction.status === "APPROVED" && this.config.policy.autoActionsEnabled && decision.delaySeconds === 0) {
+      await this.executeAction(coordinatedAction.id);
     }
     return "processed";
   }
@@ -369,13 +397,15 @@ export class RecoveryEngine {
     }
     const recoveredAmount = Math.max(recoveryCase.recoveredAmount, Math.min(amountPaid, expectedAmount ?? amountPaid));
     const fullyRecovered = expectedAmount !== null ? recoveredAmount >= expectedAmount : event.type !== "payment_link.partially_paid";
-    this.repository.saveCase({
+    const saved = this.repository.saveCase({
       ...recoveryCase,
       status: fullyRecovered ? "RECOVERED" : "PARTIALLY_RECOVERED",
       recoveredAmount,
       latestEventAt: Math.max(recoveryCase.latestEventAt, event.occurredAt),
       updatedAt: now
     }, stored.id, "outcome-verifier", fullyRecovered ? "Verified payment outcome" : "Verified partial payment", now);
+    const session = this.repository.getRecoverySessionByCase(saved.id);
+    if (session && fullyRecovered) this.repository.updateRecoverySession(session.id, { status: "PAID" }, "outcome-verifier", now);
     return "processed";
   }
 
@@ -392,6 +422,8 @@ export class RecoveryEngine {
       error: event.type === "payment_link.expired" ? "Payment Link expired without full recovery" : "Payment Link cancelled"
     }, "outcome-verifier", now);
     this.repository.saveCase({ ...recoveryCase, status: "EXHAUSTED", latestEventAt: Math.max(recoveryCase.latestEventAt, event.occurredAt), updatedAt: now }, stored.id, "outcome-verifier", event.type, now);
+    const session = this.repository.getRecoverySessionByCase(recoveryCase.id);
+    if (session) this.repository.updateRecoverySession(session.id, { status: event.type === "payment_link.expired" ? "EXPIRED" : "CLOSED" }, "outcome-verifier", now);
     return "processed";
   }
 
@@ -465,6 +497,8 @@ export class RecoveryEngine {
             throw new Error("Existing checkout URL is not an approved Razorpay host");
           }
           action = this.repository.updateAction(action.id, { status: "EXECUTING", providerUrl: url.toString(), error: null }, "checkout-orchestrator", now);
+          const session = this.repository.getRecoverySessionByCase(recoveryCase.id);
+          if (session) this.repository.updateRecoverySession(session.id, { status: "READY", destinationUrl: url.toString() }, "checkout-orchestrator", now);
           recoveryCase = this.repository.saveCase({
             ...recoveryCase,
             status: "ACTIONED",
@@ -492,6 +526,8 @@ export class RecoveryEngine {
             notes: { recovery_case: recoveryCase.id, action: action.id }
           });
           action = this.repository.updateAction(action.id, { status: "EXECUTING", providerReference: link.id, providerUrl: link.shortUrl, error: null }, "razorpay-adapter", now);
+          const session = this.repository.getRecoverySessionByCase(recoveryCase.id);
+          if (session) this.repository.updateRecoverySession(session.id, { status: "READY", destinationUrl: link.shortUrl, expiresAt: link.expireBy }, "razorpay-adapter", now);
           recoveryCase = this.repository.saveCase({
             ...recoveryCase,
             status: "ACTIONED",
@@ -502,7 +538,7 @@ export class RecoveryEngine {
         }
       }
       const succeeded = this.repository.updateAction(action.id, { status: "SUCCEEDED", error: null, nextAttemptAt: null }, "executor", this.clock.now());
-      await this.actionSuccessHandler?.onActionSucceeded(succeeded.id);
+      await this.actionCoordinator?.onActionSucceeded(succeeded.id);
       return succeeded;
     } catch (error) {
       const failedAt = this.clock.now();
@@ -536,16 +572,68 @@ export class RecoveryEngine {
     }
   }
 
-  suppressCase(caseId: string): RecoveryCase {
+  suppressCase(caseId: string, actor = "operator", reason = "Operator suppressed all contact"): RecoveryCase {
     const recoveryCase = this.repository.getCase(caseId);
     if (!recoveryCase) throw new Error("Case not found");
-    return this.repository.saveCase({ ...recoveryCase, status: "SUPPRESSED", optedOut: true, updatedAt: this.clock.now() }, null, "operator", "Operator suppressed all contact", this.clock.now());
+    const now = this.clock.now();
+    const saved = this.repository.saveCase({ ...recoveryCase, status: "SUPPRESSED", optedOut: true, updatedAt: now }, null, actor, reason, now);
+    const session = this.repository.getRecoverySessionByCase(caseId);
+    if (session) this.repository.updateRecoverySession(session.id, { status: "CLOSED" }, actor, now);
+    return saved;
   }
 
-  pauseCase(caseId: string, until: number): RecoveryCase {
+  pauseCase(caseId: string, until: number, actor = "operator", reason = "Promise-to-pay pause"): RecoveryCase {
     const recoveryCase = this.repository.getCase(caseId);
     if (!recoveryCase) throw new Error("Case not found");
     if (until <= this.clock.now()) throw new Error("Pause date must be in the future");
-    return this.repository.saveCase({ ...recoveryCase, pausedUntil: until, status: "WAITING", updatedAt: this.clock.now() }, null, "operator", "Promise-to-pay pause", this.clock.now());
+    return this.repository.saveCase({ ...recoveryCase, pausedUntil: until, status: "WAITING", updatedAt: this.clock.now() }, null, actor, reason, this.clock.now());
+  }
+
+  async applyCustomerIntent(caseId: string, intent: "OPT_OUT" | "PROMISE_TOMORROW" | "SEND_UPI" | "ALREADY_PAID"): Promise<{ intent: string; outcome: string }> {
+    const recoveryCase = this.repository.getCase(caseId);
+    if (!recoveryCase) throw new Error("Case not found");
+    const now = this.clock.now();
+    if (intent === "OPT_OUT") {
+      this.suppressCase(caseId, "whatsapp-intent-agent", "Customer opted out through signed WhatsApp reply");
+      this.repository.appendAudit({ caseId, kind: "CUSTOMER_OPT_OUT_APPLIED", actor: "whatsapp-intent-agent", data: { intent }, now });
+      return { intent, outcome: "All outreach stopped" };
+    }
+    if (intent === "PROMISE_TOMORROW") {
+      this.pauseCase(caseId, now + 86_400, "whatsapp-intent-agent", "Customer promised payment tomorrow through signed WhatsApp reply");
+      this.repository.appendAudit({ caseId, kind: "PROMISE_TO_PAY_CAPTURED", actor: "whatsapp-intent-agent", data: { intent, dueAt: now + 86_400 }, now });
+      return { intent, outcome: "Recovery paused until promise due" };
+    }
+    if (intent === "SEND_UPI") {
+      const session = this.repository.getRecoverySessionByCase(caseId);
+      if (session) this.repository.updateRecoverySession(session.id, { preferredMethod: "UPI" }, "whatsapp-intent-agent", now);
+      this.repository.appendAudit({ caseId, kind: "PAYMENT_PREFERENCE_CAPTURED", actor: "whatsapp-intent-agent", data: { preference: "UPI" }, now });
+      return { intent, outcome: session ? "Smart session updated with UPI preference" : "UPI preference recorded" };
+    }
+
+    let verifiedAmount = 0;
+    const latestAction = this.repository.listActions(caseId)[0];
+    try {
+      if (latestAction?.providerReference) {
+        const link = await this.provider.fetchPaymentLink(latestAction.providerReference);
+        if (link.status === "paid") verifiedAmount = link.amountPaid;
+      }
+      if (!verifiedAmount && recoveryCase.paymentId) {
+        const payment = await this.provider.fetchPayment(recoveryCase.paymentId);
+        if (payment.status === "captured") verifiedAmount = payment.amount;
+      }
+    } catch {
+      // Provider availability cannot turn a customer claim into verified revenue.
+    }
+    if (verifiedAmount > 0) {
+      const recoveredAmount = Math.min(verifiedAmount, recoveryCase.amount ?? verifiedAmount);
+      this.repository.saveCase({ ...recoveryCase, status: "RECOVERED", recoveredAmount, pausedUntil: null, updatedAt: now }, null,
+        "whatsapp-intent-agent", "Customer already-paid claim verified with Razorpay", now);
+      const session = this.repository.getRecoverySessionByCase(caseId);
+      if (session) this.repository.updateRecoverySession(session.id, { status: "PAID" }, "whatsapp-intent-agent", now);
+      this.repository.appendAudit({ caseId, kind: "ALREADY_PAID_VERIFIED", actor: "whatsapp-intent-agent", data: { intent, recoveredAmount }, now });
+      return { intent, outcome: "Razorpay verified payment; recovery stopped" };
+    }
+    this.repository.appendAudit({ caseId, kind: "ALREADY_PAID_UNVERIFIED", actor: "whatsapp-intent-agent", data: { intent }, now });
+    return { intent, outcome: "Claim recorded; Razorpay has not confirmed payment yet" };
   }
 }

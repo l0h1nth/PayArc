@@ -54,6 +54,48 @@ function parseJsonBody<T>(value: unknown, schema: z.ZodType<T>): T {
   return schema.parse(value ?? {});
 }
 
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>'"]/g, (character) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;"
+  })[character]!);
+}
+
+function recoveryPage(input: {
+  title: string;
+  message: string;
+  amount?: string | undefined;
+  destination?: string;
+  refreshSeconds?: number;
+  tone?: "blue" | "green" | "amber";
+}): string {
+  const destination = input.destination ? escapeHtml(input.destination) : null;
+  const refresh = input.refreshSeconds === undefined ? "" : `<meta http-equiv="refresh" content="${input.refreshSeconds}${destination ? `;url=${destination}` : ""}">`;
+  const action = destination ? `<a class="action" href="${destination}">Continue securely</a>` : "";
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${refresh}<title>${escapeHtml(input.title)} · PayArc</title><style>
+  :root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#182238;background:#f4f7fc}*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:radial-gradient(circle at 80% 10%,#dbeafe 0,transparent 30%),#f4f7fc}.card{width:min(100%,460px);background:#fff;border:1px solid #dbe3ef;border-radius:22px;box-shadow:0 24px 70px #1e3a5f1c;overflow:hidden}.top{height:9px;background:${input.tone === "green" ? "#12a06a" : input.tone === "amber" ? "#d78808" : "#2874f0"}}.body{padding:34px}.brand{display:flex;align-items:center;gap:11px;font-weight:800;font-size:20px}.mark{display:grid;place-items:center;width:34px;height:34px;border-radius:10px;background:#2874f0;color:#fff}.eyebrow{margin:30px 0 8px;color:#64748b;font-size:12px;font-weight:800;letter-spacing:.1em;text-transform:uppercase}h1{margin:0;font-size:28px;line-height:1.2}p{font-size:16px;line-height:1.6;color:#56657a}.amount{margin:24px 0;padding:16px 18px;border-radius:13px;background:#f3f7fd;font-size:23px;font-weight:800}.action{display:block;margin-top:24px;padding:14px 18px;border-radius:10px;background:#2874f0;color:#fff;text-decoration:none;text-align:center;font-weight:750}.foot{margin-top:22px;font-size:12px;color:#8290a3}.pulse{display:inline-block;width:8px;height:8px;margin-right:7px;border-radius:50%;background:#12a06a;box-shadow:0 0 0 5px #12a06a20}</style></head><body><main class="card"><div class="top"></div><div class="body"><div class="brand"><span class="mark">P</span>PayArc</div><div class="eyebrow">Smart recovery session</div><h1>${escapeHtml(input.title)}</h1><p>${escapeHtml(input.message)}</p>${input.amount ? `<div class="amount">${escapeHtml(input.amount)}</div>` : ""}${action}<div class="foot"><span class="pulse"></span>Payment status is verified with Razorpay. This page never asks for card or UPI credentials.</div></div></main></body></html>`;
+}
+
+function approvedRecoveryDestination(value: string, allowMock: boolean): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && (
+      url.hostname === "rzp.io" || url.hostname === "razorpay.com" || url.hostname.endsWith(".razorpay.com") ||
+      (allowMock && url.hostname === "example.test")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function classifyWhatsAppIntent(text: string): "OPT_OUT" | "PROMISE_TOMORROW" | "SEND_UPI" | "ALREADY_PAID" | "UNKNOWN" {
+  const normalized = text.trim().toLowerCase();
+  if (/\b(stop|unsubscribe|opt[ -]?out|band|mat bhej|nahi chahiye)\b/.test(normalized)) return "OPT_OUT";
+  if (/\b(already paid|paid already|payment done|pay kar diya|kar diya|ho gaya)\b/.test(normalized)) return "ALREADY_PAID";
+  if (/\b(upi|gpay|google pay|phonepe|paytm)\b/.test(normalized)) return "SEND_UPI";
+  if (/\b(tomorrow|kal|salary|next day)\b/.test(normalized)) return "PROMISE_TOMORROW";
+  return "UNKNOWN";
+}
+
 type PresentedCase = RecoveryCase & {
   automation: null | Pick<StoredAction, "id" | "type" | "status" | "attemptCount" | "maxAttempts" | "nextAttemptAt" | "lastAttemptAt">;
 };
@@ -113,10 +155,16 @@ export async function buildApplication(options: BuildOptions = {}): Promise<AppC
         templateLanguage: config.whatsapp.templateLanguage
       })
     : new ClickToChatWhatsAppProvider());
+  const revenueIntelligence = new RevenueIntelligenceService(repository, clock);
   const channelOrchestrator = new RecoveryChannelOrchestrator(repository, provider, whatsappProvider, config, clock);
   const ingestor = new WebhookIngestor(repository, config.razorpay.webhookSecrets, clock);
-  const engine = new RecoveryEngine(repository, provider, decisionProvider, config, clock, channelOrchestrator);
-  const revenueIntelligence = new RevenueIntelligenceService(repository, clock);
+  const engine = new RecoveryEngine(repository, provider, decisionProvider, config, clock, {
+    onFailureObserved: (event, recoveryCase, action) => revenueIntelligence.observeRecoveryFailure(event, recoveryCase, action),
+    onActionSucceeded: async (actionId) => {
+      revenueIntelligence.onRecoveryActionSucceeded(actionId);
+      await channelOrchestrator.onActionSucceeded(actionId);
+    }
+  });
   const scenarioRepository = config.nodeEnv === "production" ? null : new RecoveryRepository(":memory:");
   const scenarioProvider = scenarioRepository ? new MockPaymentProvider() : null;
   const scenarioConfig: AppConfig = {
@@ -159,6 +207,7 @@ export async function buildApplication(options: BuildOptions = {}): Promise<AppC
 
   app.setErrorHandler((error, _request, reply) => {
     const status = error instanceof z.ZodError ? 400 : 500;
+    if (status === 500) app.log.error(error);
     reply.code(status).send({
       error: status === 500 ? "Internal server error" : "Invalid request",
       details: error instanceof z.ZodError ? error.issues : undefined
@@ -181,6 +230,7 @@ export async function buildApplication(options: BuildOptions = {}): Promise<AppC
     return {
       case: recoveryCase,
       actions,
+      recoverySession: repository.getRecoverySessionByCase(recoveryCase.id),
       deliveries: repository.listChannelDeliveries(recoveryCase.id),
       // Keep transaction inspection on the local ledger's fast path. Contact and
       // consent resolution can require several Razorpay reads and is loaded only
@@ -254,7 +304,50 @@ export async function buildApplication(options: BuildOptions = {}): Promise<AppC
     }
   });
 
-  app.post("/api/worker/run", async () => engine.processPending(100));
+  app.get<{ Querystring: Record<string, string | undefined> }>("/webhooks/whatsapp", async (request, reply) => {
+    if (!config.whatsapp.webhookVerifyToken) return reply.code(503).send({ error: "WhatsApp inbound webhook is not configured" });
+    const mode = request.query["hub.mode"];
+    const token = request.query["hub.verify_token"] ?? "";
+    const challenge = request.query["hub.challenge"] ?? "";
+    const expected = Buffer.from(config.whatsapp.webhookVerifyToken);
+    const received = Buffer.from(token);
+    if (mode !== "subscribe" || expected.length !== received.length || !timingSafeEqual(expected, received)) return reply.code(403).send({ error: "Webhook verification failed" });
+    return reply.type("text/plain").send(challenge);
+  });
+
+  app.post("/webhooks/whatsapp", async (request, reply) => {
+    if (!config.whatsapp.appSecret) return reply.code(503).send({ error: "WhatsApp inbound webhook is not configured" });
+    if (!Buffer.isBuffer(request.body)) return reply.code(400).send({ error: "Expected a raw request body" });
+    const signature = String(request.headers["x-hub-signature-256"] ?? "");
+    const expected = `sha256=${createHmac("sha256", config.whatsapp.appSecret).update(request.body).digest("hex")}`;
+    const expectedBuffer = Buffer.from(expected);
+    const receivedBuffer = Buffer.from(signature);
+    if (expectedBuffer.length !== receivedBuffer.length || !timingSafeEqual(expectedBuffer, receivedBuffer)) {
+      return reply.code(401).send({ error: "WhatsApp signature is invalid" });
+    }
+    const payload = JSON.parse(request.body.toString("utf8")) as {
+      entry?: Array<{ changes?: Array<{ value?: { messages?: Array<{ id?: string; from?: string; text?: { body?: string } }> } }> }>;
+    };
+    const messages = payload.entry?.flatMap((entry) => entry.changes ?? []).flatMap((change) => change.value?.messages ?? []) ?? [];
+    const outcomes: Array<{ intent: string; outcome: string }> = [];
+    for (const message of messages) {
+      const digits = message.from?.replace(/\D/g, "") ?? "";
+      const intent = classifyWhatsAppIntent(message.text?.body ?? "");
+      if (!message.id || !digits || intent === "UNKNOWN" || !repository.claimWhatsAppInboundMessage(message.id, clock.now())) continue;
+      const recipientHash = createHmac("sha256", config.razorpay.webhookSecrets[0]!).update(`+${digits}`).digest("hex");
+      const delivery = repository.findLatestDeliveryByRecipient(recipientHash);
+      const action = delivery ? repository.getAction(delivery.actionId) : null;
+      if (!action) continue;
+      outcomes.push(await engine.applyCustomerIntent(action.caseId, intent));
+      repository.recordRevenueOperation({ operation: `WHATSAPP_INTENT_${intent}`, status: "SUCCEEDED", output: { caseId: action.caseId, deliveryId: delivery!.id }, now: clock.now() });
+    }
+    return reply.code(200).send({ accepted: true, processed: outcomes.length, outcomes });
+  });
+
+  app.post("/api/worker/run", async () => {
+    const worker = await engine.processPending(100);
+    return { ...worker, swarmsAdvanced: revenueIntelligence.reconcileFailureSwarms() };
+  });
 
   app.post<{ Params: { id: string } }>("/api/revenue/incidents/:id/resolve", async (request, reply) => {
     try { return revenueIntelligence.resolveIncident(request.params.id); }
@@ -587,6 +680,41 @@ export async function buildApplication(options: BuildOptions = {}): Promise<AppC
     ingestor.ingest(raw, signWebhook(raw, config.razorpay.webhookSecrets[0]!), `evt_demo_${randomUUID()}`);
     const worker = await engine.processPending(10);
     return { worker, case: repository.getCase(action.caseId) };
+  });
+
+  app.get<{ Params: { id: string } }>("/recover/:id", async (request, reply) => {
+    const session = repository.getRecoverySession(request.params.id);
+    reply.header("cache-control", "no-store");
+    reply.header("content-security-policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action https://rzp.io https://razorpay.com https://*.razorpay.com; frame-ancestors 'none'");
+    reply.type("text/html; charset=utf-8");
+    if (!session) return reply.code(404).send(recoveryPage({ title: "Recovery session not found", message: "This recovery address is invalid or is no longer available.", tone: "amber" }));
+    const recoveryCase = repository.getCase(session.caseId);
+    if (!recoveryCase) return reply.code(404).send(recoveryPage({ title: "Recovery session not found", message: "The linked payment obligation is unavailable.", tone: "amber" }));
+    const now = clock.now();
+    const amount = recoveryCase.amount === null ? undefined : `${recoveryCase.currency ?? "INR"} ${(recoveryCase.amount / 100).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`;
+    if (session.status === "PAID" || recoveryCase.status === "RECOVERED") {
+      if (session.status !== "PAID") repository.updateRecoverySession(session.id, { status: "PAID" }, "smart-session", now);
+      return reply.send(recoveryPage({ title: "Payment received", message: "Razorpay has verified this obligation as paid. No further recovery messages will be sent.", amount, tone: "green" }));
+    }
+    if (session.expiresAt <= now || session.status === "EXPIRED") {
+      if (session.status !== "EXPIRED") repository.updateRecoverySession(session.id, { status: "EXPIRED" }, "smart-session", now);
+      return reply.code(410).send(recoveryPage({ title: "This session has expired", message: "For your safety, the bounded payment window is closed. Please contact the merchant for a fresh checkout.", amount, tone: "amber" }));
+    }
+    if (["CLOSED"].includes(session.status) || ["SUPPRESSED", "EXHAUSTED"].includes(recoveryCase.status)) {
+      return reply.code(410).send(recoveryPage({ title: "Recovery has stopped", message: "This payment session was closed by a stopping rule. No action is required here.", amount, tone: "amber" }));
+    }
+    repository.recordRecoverySessionOpen(session.id, now);
+    if (recoveryCase.pausedUntil && recoveryCase.pausedUntil > now) {
+      const wait = Math.max(5, Math.min(300, recoveryCase.pausedUntil - now));
+      return reply.send(recoveryPage({ title: "We’ll wait as requested", message: "This recovery is paused until the promised payment time. The same link will become ready automatically.", amount, refreshSeconds: wait, tone: "amber" }));
+    }
+    if (session.status === "READY" && session.destinationUrl && approvedRecoveryDestination(session.destinationUrl, provider.mode === "mock")) {
+      return reply.send(recoveryPage({ title: session.preferredMethod === "UPI" ? "Continue with your UPI preference" : "Your secure checkout is ready", message: "You are being sent to the current Razorpay checkout. This PayArc link remains the same if the safe payment route changes.", amount, destination: session.destinationUrl, refreshSeconds: 2 }));
+    }
+    const action = repository.listActions(recoveryCase.id)[0];
+    const nextAt = action?.nextAttemptAt ?? now + 5;
+    const seconds = Math.max(3, Math.min(30, nextAt - now));
+    return reply.send(recoveryPage({ title: "Preparing the safest payment route", message: "PayArc is observing provider health or creating a bounded Razorpay checkout. This page refreshes automatically—there is no need to request another link.", amount, refreshSeconds: seconds }));
   });
 
   await app.register(fastifyStatic, {

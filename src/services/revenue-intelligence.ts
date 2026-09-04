@@ -1,5 +1,5 @@
-import { randomUUID } from "node:crypto";
-import type { Clock, NormalizedEvent } from "../domain/types.js";
+import { createHash, randomUUID } from "node:crypto";
+import type { Clock, NormalizedEvent, RecoveryCase, StoredAction } from "../domain/types.js";
 import type {
   ConversationData,
   IncidentData,
@@ -173,6 +173,94 @@ export class RevenueIntelligenceService {
     this.repository.recordRevenueOperation({ objectId: id, operation: event.type.toUpperCase().replaceAll(".", "_"), status: "SUCCEEDED", output: { circuitBreaker: next.data.circuitBreaker }, now });
   }
 
+  observeRecoveryFailure(event: NormalizedEvent, recoveryCase: RecoveryCase, action: StoredAction): void {
+    if (recoveryCase.failureClass !== "TRANSIENT_PROVIDER" || !action.policy.allowed) return;
+    const now = this.clock.now();
+    const fingerprint = [event.method ?? "unknown", event.errorSource ?? "provider", event.errorReason ?? event.errorCode ?? "failure"]
+      .map((value) => value.toLowerCase().replace(/[^a-z0-9_-]/g, ""))
+      .join(":");
+    const id = `inc_swarm_${createHash("sha256").update(fingerprint).digest("hex").slice(0, 14)}`;
+    const existing = this.repository.getRevenueObject<IncidentData>(id);
+    const recentFailureAt = [...(existing?.data.recentFailureAt ?? []), event.occurredAt]
+      .filter((timestamp) => timestamp >= now - 120)
+      .slice(-100);
+    const affectedCaseIds = [...new Set([...(existing?.data.affectedCaseIds ?? []), recoveryCase.id])];
+    const heldActionIds = [...new Set([...(existing?.data.heldActionIds ?? []), action.id])];
+    const active = recentFailureAt.length >= 3;
+    const incident = existing ?? object<IncidentData>({
+      id, kind: "INCIDENT", status: "MONITORING", amount: 0, currency: recoveryCase.currency ?? "INR", priority: 90, customerRef: null,
+      data: { provider: "Razorpay", rail: event.method ?? "Payments", bank: event.errorSource ?? "Provider network", severity: "HIGH", failureCount: 0,
+        baselineFailureRate: .02, observedFailureRate: 0, circuitBreaker: false, startedAt: event.occurredAt, resolvedAt: null,
+        stagedReleasePercent: 0, preventedRetries: 0, fingerprint, affectedCaseIds: [], heldActionIds: [], recentFailureAt: [], automated: true }
+    }, now);
+    const next: RevenueObject<IncidentData> = {
+      ...incident,
+      status: active ? "ACTIVE" : incident.status,
+      amount: incident.amount + (recoveryCase.amount ?? 0),
+      priority: active ? 98 : incident.priority,
+      data: { ...incident.data, rail: event.method ?? incident.data.rail, bank: event.errorSource ?? incident.data.bank,
+        failureCount: incident.data.failureCount + 1, observedFailureRate: Math.min(.99, recentFailureAt.length / 10),
+        circuitBreaker: active || incident.data.circuitBreaker, fingerprint, affectedCaseIds, heldActionIds, recentFailureAt, automated: true },
+      updatedAt: now
+    };
+    if (active) {
+      let newlyHeld = 0;
+      for (const actionId of heldActionIds) {
+        const candidate = this.repository.getAction(actionId);
+        if (!candidate || !["APPROVED", "RETRY_SCHEDULED"].includes(candidate.status)) continue;
+        this.repository.updateAction(candidate.id, { status: "INCIDENT_HELD", nextAttemptAt: null,
+          error: `Retry held by automatic failure swarm ${id}` }, "payment-intelligence", now);
+        const candidateCase = this.repository.getCase(candidate.caseId);
+        if (candidateCase && !["RECOVERED", "SUPPRESSED", "EXHAUSTED"].includes(candidateCase.status)) {
+          this.repository.saveCase({ ...candidateCase, status: "WAITING", updatedAt: now }, null, "payment-intelligence", "Provider failure swarm engaged; retry held", now);
+        }
+        this.repository.appendAudit({ caseId: candidate.caseId, actionId: candidate.id, kind: "INCIDENT_RETRY_HELD", actor: "payment-intelligence", data: { incidentId: id, fingerprint }, now });
+        newlyHeld += 1;
+      }
+      next.data.preventedRetries += newlyHeld;
+    }
+    this.repository.upsertRevenueObject(next, "payment-intelligence");
+    this.repository.recordRevenueOperation({ objectId: id, operation: active ? "FAILURE_SWARM_CIRCUIT_BREAKER" : "FAILURE_SWARM_OBSERVED", status: "SUCCEEDED",
+      output: { fingerprint, failuresInWindow: recentFailureAt.length, affectedCases: affectedCaseIds.length, circuitBreaker: next.data.circuitBreaker }, now });
+  }
+
+  onRecoveryActionSucceeded(actionId: string): void {
+    const incidents = this.repository.listRevenueObjects<IncidentData>("INCIDENT");
+    const incident = incidents.find((item) => item.data.heldActionIds?.includes(actionId) && item.status === "RECOVERING");
+    if (incident) this.releaseIncident(incident.id);
+  }
+
+  reconcileFailureSwarms(): number {
+    const now = this.clock.now();
+    let changed = 0;
+    for (const incident of this.repository.listRevenueObjects<IncidentData>("INCIDENT")) {
+      if (!incident.data.automated || incident.status !== "ACTIVE") continue;
+      const lastFailureAt = incident.data.recentFailureAt?.at(-1) ?? incident.data.startedAt;
+      if (lastFailureAt > now - 300) continue;
+      this.resolveIncident(incident.id);
+      this.repository.recordRevenueOperation({ objectId: incident.id, operation: "FAILURE_SWARM_QUIET_WINDOW_PASSED", status: "SUCCEEDED",
+        output: { quietSeconds: now - lastFailureAt, canaryReleasePercent: 25 }, now });
+      changed += 1;
+    }
+    return changed;
+  }
+
+  private releaseHeldActions(item: RevenueObject<IncidentData>, percent: number): number {
+    const ids = item.data.heldActionIds ?? [];
+    const target = Math.ceil(ids.length * percent / 100);
+    const alreadyReleased = ids.filter((id) => this.repository.getAction(id)?.status !== "INCIDENT_HELD").length;
+    let released = 0;
+    for (const id of ids) {
+      if (alreadyReleased + released >= target) break;
+      const action = this.repository.getAction(id);
+      if (!action || action.status !== "INCIDENT_HELD") continue;
+      this.repository.updateAction(id, { status: "APPROVED", error: null, nextAttemptAt: this.clock.now() + released * 2 }, "payment-intelligence", this.clock.now());
+      this.repository.appendAudit({ caseId: action.caseId, actionId: id, kind: "INCIDENT_CANARY_RELEASED", actor: "payment-intelligence", data: { incidentId: item.id, releasePercent: percent }, now: this.clock.now() });
+      released += 1;
+    }
+    return released;
+  }
+
   registerJourney(input: {
     customerRef: string;
     orderId?: string | undefined;
@@ -289,14 +377,16 @@ export class RevenueIntelligenceService {
   resolveIncident(id: string): RevenueObject<IncidentData> {
     const item = this.require<IncidentData>(id, "INCIDENT");
     if (item.status === "RESOLVED") return item;
-    return this.save({ ...item, status: "RECOVERING", data: { ...item.data, circuitBreaker: false, resolvedAt: this.clock.now(), stagedReleasePercent: 25 } }, "RESOLVE_INCIDENT", { releasePercent: 25 });
+    const released = this.releaseHeldActions(item, 25);
+    return this.save({ ...item, status: "RECOVERING", data: { ...item.data, circuitBreaker: false, resolvedAt: this.clock.now(), stagedReleasePercent: 25 } }, "RESOLVE_INCIDENT", { releasePercent: 25, released });
   }
 
   releaseIncident(id: string): RevenueObject<IncidentData> {
     const item = this.require<IncidentData>(id, "INCIDENT");
     if (item.data.circuitBreaker) throw new Error("Resolve the incident before releasing recovery traffic");
     const percent = Math.min(100, item.data.stagedReleasePercent + 25);
-    return this.save({ ...item, status: percent === 100 ? "RESOLVED" : "RECOVERING", data: { ...item.data, stagedReleasePercent: percent } }, "STAGED_RECOVERY_RELEASE", { releasePercent: percent });
+    const released = this.releaseHeldActions(item, percent);
+    return this.save({ ...item, status: percent === 100 ? "RESOLVED" : "RECOVERING", data: { ...item.data, stagedReleasePercent: percent } }, "STAGED_RECOVERY_RELEASE", { releasePercent: percent, released });
   }
 
   recoverJourney(id: string): RevenueObject<JourneyData> {

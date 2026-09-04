@@ -132,13 +132,23 @@ export class RecoveryChannelOrchestrator {
     if (recoveryCase.optedOut || ["RECOVERED", "SUPPRESSED", "EXHAUSTED"].includes(recoveryCase.status)) reasons.push("A stopping rule prevents contact");
     if (recoveryCase.contactCount >= this.config.policy.maxContactsPerCase) reasons.push("Per-case contact limit reached");
     if (this.whatsappProvider.mode === "CLOUD_API" && !this.config.policy.externalActionsEnabled) reasons.push("External actions are disabled");
+    if (contact) {
+      const recipientHash = createHmac("sha256", this.config.razorpay.webhookSecrets[0]!).update(contact).digest("hex");
+      const recentContacts = this.repository.countSentDeliveriesForRecipient(
+        recipientHash,
+        this.clock.now() - this.config.policy.customerContactWindowSeconds
+      );
+      if (recentContacts >= this.config.policy.maxContactsPerCustomer) reasons.push("Customer-wide contact budget reached");
+    }
     return { ...safeResolution, autoSendEnabled: this.config.whatsapp.autoSendEnabled,
       deliveryMode: this.whatsappProvider.mode, ready: reasons.length === 0, reasons };
   }
 
   async deliver(actionId: string, options: { operatorConsent?: boolean; automatic?: boolean } = {}): Promise<{ delivery: ChannelDelivery; deliveryUrl: string | null }> {
     const existing = this.repository.getChannelDelivery(actionId, "WHATSAPP");
-    if (existing && existing.status !== "FAILED") return { delivery: existing, deliveryUrl: null };
+    if (existing && existing.status !== "FAILED" && !(existing.status === "SENDING" && existing.updatedAt < this.clock.now() - 300)) {
+      return { delivery: existing, deliveryUrl: null };
+    }
     const action = this.repository.getAction(actionId);
     if (!action) throw new Error("Action not found");
     const recoveryCase = this.repository.getCase(action.caseId);
@@ -160,11 +170,19 @@ export class RecoveryChannelOrchestrator {
 
     const recipientHash = createHmac("sha256", this.config.razorpay.webhookSecrets[0]!)
       .update(resolution.contact).digest("hex");
+    const reservation = this.repository.reserveChannelDelivery({ actionId: action.id, mode: this.whatsappProvider.mode, recipientHash,
+      since: this.clock.now() - this.config.policy.customerContactWindowSeconds, limit: this.config.policy.maxContactsPerCustomer, now: this.clock.now() });
+    if (!reservation) {
+      this.auditSkip(recoveryCase, action, "CUSTOMER_FATIGUE_BUDGET_REACHED", options.automatic === true);
+      throw new Error("Customer-wide contact budget reached");
+    }
+    const session = this.repository.getRecoverySessionByCase(recoveryCase.id);
+    const recoveryUrl = session ? `${this.config.publicBaseUrl}/recover/${encodeURIComponent(session.id)}` : action.providerUrl;
     try {
       const result = await this.whatsappProvider.deliver({
         recipient: resolution.contact,
         amountDisplay: `${recoveryCase.currency ?? "INR"} ${((recoveryCase.amount ?? 0) / 100).toLocaleString("en-IN")}`,
-        paymentUrl: action.providerUrl,
+        paymentUrl: recoveryUrl,
         caseReference: recoveryCase.id
       });
       const now = this.clock.now();

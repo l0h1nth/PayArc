@@ -36,6 +36,11 @@ export type IncidentData = {
   resolvedAt: number | null;
   stagedReleasePercent: number;
   preventedRetries: number;
+  fingerprint?: string;
+  affectedCaseIds?: string[];
+  heldActionIds?: string[];
+  recentFailureAt?: number[];
+  automated?: boolean;
 };
 
 export type JourneyData = {

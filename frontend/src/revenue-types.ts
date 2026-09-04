@@ -15,6 +15,7 @@ export type IncidentData = {
   provider: string; rail: string; bank: string; severity: string; failureCount: number;
   baselineFailureRate: number; observedFailureRate: number; circuitBreaker: boolean;
   startedAt: number; resolvedAt: number | null; stagedReleasePercent: number; preventedRetries: number;
+  fingerprint?: string; affectedCaseIds?: string[]; heldActionIds?: string[]; recentFailureAt?: number[]; automated?: boolean;
 };
 
 export type JourneyData = {

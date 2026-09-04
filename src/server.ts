@@ -7,6 +7,7 @@ const workerTimer = setInterval(() => {
   if (workerRunning) return;
   workerRunning = true;
   void context.engine.processPending(context.config.worker.batchSize)
+    .then(() => { context.revenueIntelligence.reconcileFailureSwarms(); })
     .catch((error) => context.app.log.error(error))
     .finally(() => { workerRunning = false; });
 }, context.config.worker.intervalMs);

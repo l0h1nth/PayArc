@@ -493,3 +493,9 @@ button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{ou
   .main-shell{background:linear-gradient(to bottom,#08090b 0 80px,#f7f7f8 80px)}
   .content{min-height:calc(100vh - 66px)}
 }
+
+/* One customer-safe address that survives provider retries and path changes. */
+.smart-session{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:12px;padding:11px;border:1px solid #cfe2ff;border-radius:7px;background:#edf5ff}
+.smart-session>div{display:flex;align-items:center;gap:8px}.smart-session>div:first-child>svg{color:#2670e8}.smart-session span{display:grid;gap:2px}.smart-session strong{font-size:13px}.smart-session small{font-size:11px;color:#6a7890}.smart-session a{margin:0}.smart-session button{min-height:30px;padding:0 9px;font-size:11px}
+.counterfactual-card{display:flex;align-items:flex-start;gap:9px;margin-top:10px;padding:10px 11px;border:1px solid #e2dcff;border-radius:7px;background:#f7f4ff;color:#6246ca}.counterfactual-card svg{flex:0 0 auto}.counterfactual-card>div{display:grid;gap:3px}.counterfactual-card span{font-size:10px;text-transform:uppercase;font-weight:800;letter-spacing:.06em}.counterfactual-card strong{font-size:12px;color:#28344e}.counterfactual-card small{font-size:11px;line-height:1.45;color:#66728a}
+@media(max-width:520px){.smart-session{align-items:flex-start;flex-direction:column}}
