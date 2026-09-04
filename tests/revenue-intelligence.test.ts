@@ -80,6 +80,56 @@ test("Hinglish promise capture creates an auditable promise and kept outcome rec
   repository.close();
 });
 
+test("missed promise advances through one reminder, grace period, and merchant review", () => {
+  const { repository, clock, service } = setupService();
+  const conversation = service.respondConversation("conv_orbit_voice", "PROMISE_TOMORROW");
+  const promiseId = conversation.data.linkedPromiseId!;
+
+  let promise = service.snapshot().promises.find((item) => item.id === promiseId)!;
+  assert.equal(promise.data.workflowStage, "PAUSED_UNTIL_DUE");
+  assert.equal(promise.data.contactAttempts, 0);
+
+  clock.advance(86_400);
+  assert.ok(service.reconcilePromiseWorkflows() >= 1);
+  promise = service.snapshot().promises.find((item) => item.id === promiseId)!;
+  assert.equal(promise.data.workflowStage, "DUE_CHECK");
+
+  assert.ok(service.reconcilePromiseWorkflows() >= 1);
+  promise = service.snapshot().promises.find((item) => item.id === promiseId)!;
+  assert.equal(promise.status, "MISSED");
+  assert.equal(promise.data.workflowStage, "REMINDER_SCHEDULED");
+
+  clock.advance(300);
+  assert.ok(service.reconcilePromiseWorkflows() >= 1);
+  promise = service.snapshot().promises.find((item) => item.id === promiseId)!;
+  assert.equal(promise.data.workflowStage, "GRACE_PERIOD");
+  assert.equal(promise.data.contactAttempts, 1);
+
+  clock.advance(86_400);
+  assert.ok(service.reconcilePromiseWorkflows() >= 1);
+  promise = service.snapshot().promises.find((item) => item.id === promiseId)!;
+  assert.equal(promise.data.workflowStage, "MERCHANT_REVIEW");
+  assert.equal(service.snapshot().receivables.find((item) => item.id === "recv_orbit_1049")!.status, "HUMAN_REVIEW");
+  assert.equal(repository.listRevenueOperations().filter((item) => item.objectId === promiseId && item.operation === "PROMISE_REMINDER_DISPATCHED").length, 1);
+  assert.equal(repository.verifyAuditChain().valid, true);
+  repository.close();
+});
+
+test("verified payment stops a scheduled promise reminder", () => {
+  const { repository, clock, service } = setupService();
+  const promiseId = service.respondConversation("conv_orbit_voice", "PROMISE_TOMORROW").data.linkedPromiseId!;
+  service.updatePromise(promiseId, "MISSED");
+  let promise = service.updatePromise(promiseId, "KEPT");
+  assert.equal(promise.data.workflowStage, "CLOSED_PAID");
+  clock.advance(600);
+  assert.equal(service.reconcilePromiseWorkflows(), 0);
+  promise = service.snapshot().promises.find((item) => item.id === promiseId)!;
+  assert.equal(promise.status, "KEPT");
+  assert.equal(promise.data.contactAttempts, 0);
+  assert.equal(repository.listRevenueOperations().filter((item) => item.operation === "PROMISE_REMINDER_DISPATCHED").length, 0);
+  repository.close();
+});
+
 test("revenue APIs mutate state and reject invalid conversation intents", async () => {
   const repository = new RecoveryRepository(":memory:");
   const context = await buildApplication({ config: testConfig(), repository, clock: new TestClock() });

@@ -46,9 +46,16 @@ export type ConversationData = {
   linkedReceivableId: string | null; linkedPromiseId: string | null; nextAction: string;
 };
 
+export type PromiseWorkflowStage =
+  | "PAUSED_UNTIL_DUE" | "DUE_CHECK" | "REMINDER_SCHEDULED" | "GRACE_PERIOD"
+  | "MERCHANT_REVIEW" | "CLOSED_PAID" | "CLOSED_CANCELLED";
+
 export type PromiseData = {
   dueAt: number; channel: string; confidence: number; linkedReceivableId: string | null;
   reminderAt: number | null; keptAt: number | null; stoppingRule: string;
+  workflowStage?: PromiseWorkflowStage; reminderSentAt?: number | null; graceExpiresAt?: number | null;
+  contactAttempts?: number; maxContactAttempts?: number; lastActivityAt?: number;
+  lastActivity?: string; consentVerified?: boolean;
 };
 
 export type PortfolioRecommendation = {

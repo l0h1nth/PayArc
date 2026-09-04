@@ -346,7 +346,11 @@ export async function buildApplication(options: BuildOptions = {}): Promise<AppC
 
   app.post("/api/worker/run", async () => {
     const worker = await engine.processPending(100);
-    return { ...worker, swarmsAdvanced: revenueIntelligence.reconcileFailureSwarms() };
+    return {
+      ...worker,
+      swarmsAdvanced: revenueIntelligence.reconcileFailureSwarms(),
+      promisesAdvanced: revenueIntelligence.reconcilePromiseWorkflows()
+    };
   });
 
   app.post<{ Params: { id: string } }>("/api/revenue/incidents/:id/resolve", async (request, reply) => {

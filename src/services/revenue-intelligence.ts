@@ -7,6 +7,7 @@ import type {
   MandateData,
   PortfolioRecommendation,
   PromiseData,
+  PromiseWorkflowStage,
   ReceivableData,
   RevenueMetrics,
   RevenueObject,
@@ -17,6 +18,30 @@ import type {
 import { RecoveryRepository } from "../storage/database.js";
 
 type AnyRevenueData = IncidentData | JourneyData | SubscriptionData | ReceivableData | MandateData | ConversationData | PromiseData;
+
+const promiseReminderDelaySeconds = 300;
+const promiseGracePeriodSeconds = 86_400;
+const defaultPromiseContactLimit = 1;
+
+function normalizePromiseData(data: PromiseData, status: string, now: number): PromiseData {
+  let workflowStage: PromiseWorkflowStage;
+  if (data.workflowStage) workflowStage = data.workflowStage;
+  else if (status === "KEPT") workflowStage = "CLOSED_PAID";
+  else if (status === "CANCELLED") workflowStage = "CLOSED_CANCELLED";
+  else if (status === "MISSED") workflowStage = data.reminderAt && data.reminderAt > now ? "REMINDER_SCHEDULED" : "MERCHANT_REVIEW";
+  else workflowStage = data.dueAt > now ? "PAUSED_UNTIL_DUE" : "DUE_CHECK";
+  return {
+    ...data,
+    workflowStage,
+    reminderSentAt: data.reminderSentAt ?? null,
+    graceExpiresAt: data.graceExpiresAt ?? null,
+    contactAttempts: data.contactAttempts ?? 0,
+    maxContactAttempts: data.maxContactAttempts ?? defaultPromiseContactLimit,
+    lastActivityAt: data.lastActivityAt ?? data.dueAt,
+    lastActivity: data.lastActivity ?? (workflowStage === "CLOSED_PAID" ? "Payment verified; all recovery stopped" : "Promise captured and contact paused"),
+    consentVerified: data.consentVerified ?? false
+  };
+}
 
 function object<T>(input: Omit<RevenueObject<T>, "createdAt" | "updatedAt">, now: number): RevenueObject<T> {
   return { ...input, createdAt: now, updatedAt: now };
@@ -98,11 +123,11 @@ export class RevenueIntelligenceService {
       }, now),
       object<PromiseData>({
         id: "promise_kept_31", kind: "PROMISE", status: "KEPT", amount: 159_900, currency: "INR", priority: 30, customerRef: "cus_10BB",
-        data: { dueAt: now - day, channel: "WHATSAPP", confidence: .91, linkedReceivableId: null, reminderAt: now - day - hour, keptAt: now - day + 600, stoppingRule: "Stop all outreach after verified payment" }
+        data: { dueAt: now - day, channel: "WHATSAPP", confidence: .91, linkedReceivableId: null, reminderAt: null, keptAt: now - day + 600, stoppingRule: "Stop all outreach after verified payment", workflowStage: "CLOSED_PAID", reminderSentAt: null, graceExpiresAt: null, contactAttempts: 0, maxContactAttempts: 1, lastActivityAt: now - day + 600, lastActivity: "Payment verified; all recovery stopped", consentVerified: true }
       }, now),
       object<PromiseData>({
         id: "promise_due_45", kind: "PROMISE", status: "OPEN", amount: 64_900, currency: "INR", priority: 76, customerRef: "cus_8D20",
-        data: { dueAt: now + day, channel: "VOICE_HINGLISH", confidence: .84, linkedReceivableId: null, reminderAt: now + day - hour, keptAt: null, stoppingRule: "One reminder, then human escalation; stop on payment or opt-out" }
+        data: { dueAt: now + day, channel: "VOICE_HINGLISH", confidence: .84, linkedReceivableId: null, reminderAt: null, keptAt: null, stoppingRule: "One reminder, then human escalation; stop on payment or opt-out", workflowStage: "PAUSED_UNTIL_DUE", reminderSentAt: null, graceExpiresAt: null, contactAttempts: 0, maxContactAttempts: 1, lastActivityAt: now, lastActivity: "Promise captured and contact paused", consentVerified: true }
       }, now)
     ];
     for (const fixture of fixtures) this.repository.upsertRevenueObject(fixture, "demo-seed");
@@ -245,6 +270,82 @@ export class RevenueIntelligenceService {
     return changed;
   }
 
+  reconcilePromiseWorkflows(): number {
+    const now = this.clock.now();
+    let changed = 0;
+    for (const promise of this.repository.listRevenueObjects<PromiseData>("PROMISE")) {
+      if (["KEPT", "CANCELLED"].includes(promise.status)) continue;
+      const data = normalizePromiseData(promise.data, promise.status, now);
+
+      if (data.workflowStage === "PAUSED_UNTIL_DUE" && data.dueAt <= now) {
+        this.save({ ...promise, data: { ...data, workflowStage: "DUE_CHECK", lastActivityAt: now, lastActivity: "Promise due; payment verification started" } }, "PROMISE_DUE_CHECK_STARTED", { dueAt: data.dueAt });
+        changed += 1;
+        continue;
+      }
+
+      if (data.workflowStage === "DUE_CHECK") {
+        this.save({
+          ...promise,
+          status: "MISSED",
+          data: {
+            ...data,
+            workflowStage: "REMINDER_SCHEDULED",
+            reminderAt: now + promiseReminderDelaySeconds,
+            lastActivityAt: now,
+            lastActivity: "No verified payment found; one consented reminder scheduled"
+          }
+        }, "PROMISE_PAYMENT_NOT_FOUND", { reminderInSeconds: promiseReminderDelaySeconds });
+        changed += 1;
+        continue;
+      }
+
+      if (data.workflowStage === "REMINDER_SCHEDULED" && (data.reminderAt ?? now) <= now) {
+        const contactAttempts = data.contactAttempts ?? 0;
+        const contactLimit = data.maxContactAttempts ?? defaultPromiseContactLimit;
+        if (!data.consentVerified || contactAttempts >= contactLimit) {
+          this.save({
+            ...promise,
+            status: "MISSED",
+            data: { ...data, workflowStage: "MERCHANT_REVIEW", reminderAt: null, lastActivityAt: now, lastActivity: data.consentVerified ? "Contact limit reached; merchant review required" : "Consent unavailable; automatic contact blocked" }
+          }, "PROMISE_REMINDER_BLOCKED", { consentVerified: data.consentVerified, contactAttempts, contactLimit });
+        } else {
+          this.save({
+            ...promise,
+            status: "MISSED",
+            data: {
+              ...data,
+              workflowStage: "GRACE_PERIOD",
+              reminderAt: null,
+              reminderSentAt: now,
+              graceExpiresAt: now + promiseGracePeriodSeconds,
+              contactAttempts: contactAttempts + 1,
+              lastActivityAt: now,
+              lastActivity: `One consented reminder dispatched via ${data.channel}`
+            }
+          }, "PROMISE_REMINDER_DISPATCHED", { channel: data.channel, contactAttempt: contactAttempts + 1, contactLimit });
+        }
+        changed += 1;
+        continue;
+      }
+
+      if (data.workflowStage === "GRACE_PERIOD" && (data.graceExpiresAt ?? now) <= now) {
+        this.save({
+          ...promise,
+          status: "MISSED",
+          data: { ...data, workflowStage: "MERCHANT_REVIEW", graceExpiresAt: null, lastActivityAt: now, lastActivity: "Grace period ended unpaid; automatic contact stopped for merchant review" }
+        }, "PROMISE_ESCALATED_TO_MERCHANT", { contactAttempts: data.contactAttempts, contactLimit: data.maxContactAttempts });
+        if (data.linkedReceivableId) {
+          const receivable = this.repository.getRevenueObject<ReceivableData>(data.linkedReceivableId);
+          if (receivable && !["PAID", "CANCELLED"].includes(receivable.status)) {
+            this.save({ ...receivable, status: "HUMAN_REVIEW", data: { ...receivable.data, promisedAt: data.dueAt, nextAction: "MERCHANT_REVIEW_AFTER_MISSED_PROMISE" } }, "RECONCILE_MISSED_PROMISE", { promiseId: promise.id });
+          }
+        }
+        changed += 1;
+      }
+    }
+    return changed;
+  }
+
   private releaseHeldActions(item: RevenueObject<IncidentData>, percent: number): number {
     const ids = item.data.heldActionIds ?? [];
     const target = Math.ceil(ids.length * percent / 100);
@@ -329,7 +430,7 @@ export class RevenueIntelligenceService {
 
   snapshot(): RevenueSnapshot {
     const portfolioState = this.repository.getRevenueState<{ recommendations: PortfolioRecommendation[] }>("portfolio");
-    const promises = this.repository.listRevenueObjects<PromiseData>("PROMISE");
+    const promises = this.repository.listRevenueObjects<PromiseData>("PROMISE").map((item) => ({ ...item, data: normalizePromiseData(item.data, item.status, this.clock.now()) }));
     const incidents = this.repository.listRevenueObjects<IncidentData>("INCIDENT");
     const operations = this.repository.listRevenueOperations(1_000);
     const cases = this.repository.listCases(10_000);
@@ -356,7 +457,7 @@ export class RevenueIntelligenceService {
       netRecoveryRoi: interventionCost > 0 ? Math.max(0, grossRecovered - naturalRecovery - interventionCost) / interventionCost : null,
       activeIncidents: incidents.filter((item) => item.status === "ACTIVE").length,
       retriesPrevented: preventedRetries,
-      openPromises: promises.filter((item) => item.status === "OPEN").length,
+      openPromises: promises.filter((item) => !["KEPT", "CANCELLED"].includes(item.status)).length,
       promiseKeepRate: concluded ? kept / concluded : null,
       contactSuppressed: operations.filter((entry) => String(entry.operation).includes("SUPPRESS")).length + this.repository.listRevenueObjects<JourneyData>("JOURNEY").filter((item) => !item.data.contactEligible).length
     };
@@ -471,7 +572,7 @@ export class RevenueIntelligenceService {
       linkedPromiseId = `promise_${item.id.replace("conv_", "")}`;
       this.repository.upsertRevenueObject(object<PromiseData>({
         id: linkedPromiseId, kind: "PROMISE", status: "OPEN", amount: item.amount, currency: item.currency, priority: 85, customerRef: item.customerRef,
-        data: { dueAt: now + 86_400, channel: `${item.data.channel}_${item.data.language}`, confidence: .89, linkedReceivableId: item.data.linkedReceivableId, reminderAt: now + 82_800, keptAt: null, stoppingRule: "Pause until due time; one reminder; stop on payment or opt-out" }
+        data: { dueAt: now + 86_400, channel: `${item.data.channel}_${item.data.language}`, confidence: .89, linkedReceivableId: item.data.linkedReceivableId, reminderAt: null, keptAt: null, stoppingRule: "Pause until due time; one reminder; stop on payment or opt-out", workflowStage: "PAUSED_UNTIL_DUE", reminderSentAt: null, graceExpiresAt: null, contactAttempts: 0, maxContactAttempts: 1, lastActivityAt: now, lastActivity: "Promise captured and contact paused", consentVerified: item.data.consent }
       }, now), "conversation-agent");
       status = "PROMISE_CAPTURED";
       nextAction = "PAUSE_UNTIL_PROMISE_DUE";
@@ -484,6 +585,7 @@ export class RevenueIntelligenceService {
       status = "OPTED_OUT";
       nextAction = "STOP_ALL_CONTACT";
       this.repository.recordRevenueOperation({ objectId: item.id, operation: "SUPPRESS_CONTACT_OPT_OUT", status: "SUCCEEDED", now });
+      if (item.data.linkedPromiseId) this.updatePromise(item.data.linkedPromiseId, "CANCELLED");
     }
     return this.save({ ...item, status, data: { ...item.data, intent, linkedPromiseId, nextAction, messages: [...item.data.messages, { role: "CUSTOMER", text: responses[intent], at: now }] } }, "RESPOND_CONVERSATION", { intent, linkedPromiseId });
   }
@@ -492,7 +594,27 @@ export class RevenueIntelligenceService {
     const item = this.require<PromiseData>(id, "PROMISE");
     if (["KEPT", "CANCELLED"].includes(item.status)) return item;
     const now = this.clock.now();
-    const updated = this.save({ ...item, status: outcome, data: { ...item.data, keptAt: outcome === "KEPT" ? now : null, reminderAt: null } }, `PROMISE_${outcome}`, { stoppingRuleApplied: outcome !== "MISSED" });
+    if (outcome === "MISSED" && item.status === "MISSED") return item;
+    const data = normalizePromiseData(item.data, item.status, now);
+    const workflowStage: PromiseWorkflowStage = outcome === "KEPT" ? "CLOSED_PAID" : outcome === "CANCELLED" ? "CLOSED_CANCELLED" : "REMINDER_SCHEDULED";
+    const lastActivity = outcome === "KEPT"
+      ? "Payment verified; every pending recovery action stopped"
+      : outcome === "CANCELLED"
+        ? "Customer opted out; every pending recovery action stopped"
+        : "Promise marked missed; one consented reminder scheduled";
+    const updated = this.save({
+      ...item,
+      status: outcome,
+      data: {
+        ...data,
+        workflowStage,
+        keptAt: outcome === "KEPT" ? now : null,
+        reminderAt: outcome === "MISSED" ? now + promiseReminderDelaySeconds : null,
+        graceExpiresAt: null,
+        lastActivityAt: now,
+        lastActivity
+      }
+    }, `PROMISE_${outcome}`, { stoppingRuleApplied: outcome !== "MISSED", reminderInSeconds: outcome === "MISSED" ? promiseReminderDelaySeconds : null });
     if (item.data.linkedReceivableId && outcome === "KEPT") {
       const receivable = this.repository.getRevenueObject<ReceivableData>(item.data.linkedReceivableId);
       if (receivable) this.save({ ...receivable, status: "PAID", data: { ...receivable.data, recoveredAmount: receivable.amount, promisedAt: item.data.dueAt, nextAction: "STOP_PAID" } }, "RECONCILE_PROMISE_PAYMENT", { promiseId: id });

@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   Activity, AlertTriangle, ArrowRight, Ban, Bot, Building2, CalendarClock, Check,
   CheckCircle2, CircleDollarSign, Clock3, CreditCard, Gauge, IndianRupee,
@@ -7,7 +7,7 @@ import {
   Zap
 } from "lucide-react";
 import type {
-  ConversationData, IncidentData, JourneyData, MandateData, PromiseData,
+  ConversationData, IncidentData, JourneyData, MandateData, PromiseData, PromiseWorkflowStage,
   ReceivableData, RevenueObject, RevenueSnapshot, SubscriptionData
 } from "./revenue-types";
 
@@ -101,10 +101,95 @@ export function ReceivablesView({ items, busy, mutate }: { items: Array<RevenueO
   </div>;
 }
 
+const promisePipeline = [
+  { key: "CAPTURED", label: "Promise", detail: "Captured" },
+  { key: "PAUSED_UNTIL_DUE", label: "Pause", detail: "Until due" },
+  { key: "DUE_CHECK", label: "Verify", detail: "Payment check" },
+  { key: "REMINDER_SCHEDULED", label: "Reminder", detail: "One contact" },
+  { key: "GRACE_PERIOD", label: "Grace", detail: "Await payment" },
+  { key: "MERCHANT_REVIEW", label: "Review", detail: "Merchant queue" },
+  { key: "CLOSED", label: "Closed", detail: "Paid or stopped" }
+] as const;
+
+function currentPromiseStage(item: RevenueObject<PromiseData>, now: number): PromiseWorkflowStage {
+  if (item.data.workflowStage) return item.data.workflowStage;
+  if (item.status === "KEPT") return "CLOSED_PAID";
+  if (item.status === "CANCELLED") return "CLOSED_CANCELLED";
+  if (item.status === "MISSED") return item.data.reminderAt && item.data.reminderAt > now ? "REMINDER_SCHEDULED" : "MERCHANT_REVIEW";
+  return item.data.dueAt > now ? "PAUSED_UNTIL_DUE" : "DUE_CHECK";
+}
+
+function countdown(target: number | null | undefined, now: number) {
+  if (!target) return "No timer";
+  const remaining = Math.max(0, target - now);
+  if (remaining === 0) return "Advancing now";
+  const days = Math.floor(remaining / 86_400);
+  const hours = Math.floor((remaining % 86_400) / 3_600);
+  const minutes = Math.floor((remaining % 3_600) / 60);
+  const seconds = remaining % 60;
+  if (days) return `${days}d ${hours}h remaining`;
+  if (hours) return `${hours}h ${minutes}m remaining`;
+  return `${minutes}m ${seconds.toString().padStart(2, "0")}s remaining`;
+}
+
+function PromiseFlow({ item, now }: { item: RevenueObject<PromiseData>; now: number }) {
+  const stage = currentPromiseStage(item, now);
+  const currentIndex = stage.startsWith("CLOSED_") ? 6 : promisePipeline.findIndex((step) => step.key === stage);
+  const contactAttempts = item.data.contactAttempts ?? 0;
+  const contactLimit = item.data.maxContactAttempts ?? 1;
+  const terminal = stage.startsWith("CLOSED_");
+  const status = stage === "PAUSED_UNTIL_DUE"
+    ? { title: "Contact paused safely", detail: `Due check · ${countdown(item.data.dueAt, now)}`, tone: "blue" }
+    : stage === "DUE_CHECK"
+      ? { title: "Checking payment state", detail: "Razorpay verification is in progress", tone: "blue" }
+      : stage === "REMINDER_SCHEDULED"
+        ? { title: "One reminder scheduled", detail: countdown(item.data.reminderAt, now), tone: "amber" }
+        : stage === "GRACE_PERIOD"
+          ? { title: "Awaiting payment after reminder", detail: `Grace period · ${countdown(item.data.graceExpiresAt, now)}`, tone: "amber" }
+          : stage === "MERCHANT_REVIEW"
+            ? { title: "Merchant review required", detail: "Contact limit reached; no more automatic messages", tone: "red" }
+            : stage === "CLOSED_PAID"
+              ? { title: "Payment verified", detail: "Recovery stopped successfully", tone: "green" }
+              : { title: "Contact stopped", detail: "Customer opt-out or merchant cancellation", tone: "gray" };
+
+  return <div className="promise-flow-wrap">
+    <div className={`promise-stage-summary ${status.tone}`}>
+      <span className="promise-stage-icon">{stage === "CLOSED_PAID" ? <Check/> : stage === "MERCHANT_REVIEW" ? <UserCheck/> : <Clock3/>}</span>
+      <div><small>Current workflow state</small><strong>{status.title}</strong><span>{status.detail}</span></div>
+      <div className="promise-contact-meter"><small>Contact budget</small><strong>{contactAttempts} of {contactLimit}</strong><span>{item.data.consentVerified ? "Consent verified" : "Consent unavailable"}</span></div>
+    </div>
+    <div className="promise-pipeline" role="list" aria-label={`Recovery workflow for ${item.customerRef ?? item.id}`}>
+      {promisePipeline.map((step, index) => {
+        let state = index < currentIndex ? "complete" : index === currentIndex ? "current" : "upcoming";
+        if (stage === "MERCHANT_REVIEW" && (index === 3 || index === 4) && !item.data.reminderSentAt) state = "skipped";
+        if (terminal && index > 0 && index < 6) {
+          const wasUsed = index <= 2 || (index === 3 && Boolean(item.data.reminderSentAt)) || (index === 4 && Boolean(item.data.reminderSentAt));
+          state = wasUsed ? "complete" : "skipped";
+        }
+        return <div className={`promise-step ${state}`} role="listitem" key={step.key}>
+          <span className="promise-step-dot">{state === "complete" ? <Check/> : index + 1}</span>
+          <strong>{step.label}</strong>
+          <small>{state === "skipped" ? "Skipped safely" : step.detail}</small>
+        </div>;
+      })}
+    </div>
+    <div className="promise-flow-foot">
+      <span><Activity/> {item.data.lastActivity ?? "Promise captured"}{item.data.lastActivityAt ? ` · ${date(item.data.lastActivityAt)}` : ""}</span>
+      <span><ShieldCheck/> Stop on verified payment, opt-out, or {contactLimit} contact</span>
+    </div>
+  </div>;
+}
+
 export function ConversationsView({ conversations, promises, busy, mutate }: { conversations: Array<RevenueObject<ConversationData>>; promises: Array<RevenueObject<PromiseData>>; busy: boolean; mutate: Mutate }) {
+  const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Math.floor(Date.now() / 1000)), 1_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const activePromises = promises.filter((item) => !["KEPT", "CANCELLED"].includes(item.status)).length;
   return <div className="revenue-page">
     <PageIntro eyebrow="Consent-aware engagement" title="Hinglish conversations and promises" detail="Convert customer language into structured, auditable outcomes. Every promise pauses contact, every opt-out stops outreach, and every paid claim is verified against Razorpay."/>
-    <div className="conversation-layout"><section className="panel conversation-panel"><div className="panel-heading"><div><span className="overline">Live conversation</span><h3>Voice recovery simulator</h3></div><Languages/></div>{conversations.map((item) => <article className="conversation" key={item.id}><div className="conversation-meta"><div><span>{item.customerRef}</span><strong>{words(item.data.channel)} · {words(item.data.language)}</strong></div><Pill value={item.status}/></div><div className="transcript">{item.data.messages.map((message, index) => <div className={message.role.toLowerCase()} key={`${message.at}-${index}`}><span>{message.role === "AGENT" ? <Bot/> : <UserCheck/>}</span><p>{message.text}</p></div>)}</div><div className="structured-intent"><span>Structured outcome</span><strong>{words(item.data.intent)}</strong><small>{words(item.data.nextAction)}</small></div><div className="intent-buttons"><button disabled={busy || item.status === "OPTED_OUT"} onClick={() => void mutate("Promise captured from Hinglish conversation", () => import("./api").then(({ api }) => api.respondConversation(item.id, "PROMISE_TOMORROW")))}><CalendarClock/>“Kal pay karunga”</button><button disabled={busy || item.status === "OPTED_OUT"} onClick={() => void mutate("Existing UPI checkout selected", () => import("./api").then(({ api }) => api.respondConversation(item.id, "SEND_UPI")))}><IndianRupee/>Send UPI</button><button className="secondary-button" disabled={busy || item.status === "OPTED_OUT"} onClick={() => void mutate("Payment verification queued", () => import("./api").then(({ api }) => api.respondConversation(item.id, "ALREADY_PAID")))}><ShieldCheck/>Already paid</button><button className="danger-button" disabled={busy || item.status === "OPTED_OUT"} onClick={() => void mutate("Customer opted out; all contact stopped", () => import("./api").then(({ api }) => api.respondConversation(item.id, "OPT_OUT")))}><Ban/>Opt out</button></div></article>)}</section>
-      <section className="panel promises-panel"><div className="panel-heading"><div><span className="overline">Promise-to-pay ledger</span><h3>Stopping rules enforced</h3></div><span className="count-badge">{promises.filter((item) => item.status === "OPEN").length} open</span></div><div className="promise-list">{promises.map((item) => <article key={item.id}><div className="promise-head"><div className="object-icon"><CircleDollarSign/></div><div><strong>{money(item.amount)}</strong><span>{item.customerRef} · due {date(item.data.dueAt)}</span></div><Pill value={item.status}/></div><div className="confidence"><span>Promise confidence</span><div><i style={{ width: `${item.data.confidence * 100}%` }}/></div><strong>{percent(item.data.confidence)}</strong></div><p><ShieldCheck/>{item.data.stoppingRule}</p>{item.status === "OPEN" && <div className="card-actions"><button disabled={busy} onClick={() => void mutate("Promise kept and payment reconciled", () => import("./api").then(({ api }) => api.updatePromise(item.id, "KEPT")))}><Check/>Mark kept</button><button className="secondary-button" disabled={busy} onClick={() => void mutate("Promise missed; one escalation scheduled", () => import("./api").then(({ api }) => api.updatePromise(item.id, "MISSED")))}><Clock3/>Mark missed</button></div>}</article>)}</div></section></div>
+    <div className="conversation-layout promise-workspace"><section className="panel conversation-panel"><div className="panel-heading"><div><span className="overline">Live conversation</span><h3>Voice recovery simulator</h3></div><Languages/></div>{conversations.map((item) => <article className="conversation" key={item.id}><div className="conversation-meta"><div><span>{item.customerRef}</span><strong>{words(item.data.channel)} · {words(item.data.language)}</strong></div><Pill value={item.status}/></div><div className="transcript">{item.data.messages.map((message, index) => <div className={message.role.toLowerCase()} key={`${message.at}-${index}`}><span>{message.role === "AGENT" ? <Bot/> : <UserCheck/>}</span><p>{message.text}</p></div>)}</div><div className="structured-intent"><span>Structured outcome</span><strong>{words(item.data.intent)}</strong><small>{words(item.data.nextAction)}</small></div><div className="intent-buttons"><button disabled={busy || item.status === "OPTED_OUT"} onClick={() => void mutate("Promise captured from Hinglish conversation", () => import("./api").then(({ api }) => api.respondConversation(item.id, "PROMISE_TOMORROW")))}><CalendarClock/>“Kal pay karunga”</button><button disabled={busy || item.status === "OPTED_OUT"} onClick={() => void mutate("Existing UPI checkout selected", () => import("./api").then(({ api }) => api.respondConversation(item.id, "SEND_UPI")))}><IndianRupee/>Send UPI</button><button className="secondary-button" disabled={busy || item.status === "OPTED_OUT"} onClick={() => void mutate("Payment verification queued", () => import("./api").then(({ api }) => api.respondConversation(item.id, "ALREADY_PAID")))}><ShieldCheck/>Already paid</button><button className="danger-button" disabled={busy || item.status === "OPTED_OUT"} onClick={() => void mutate("Customer opted out; all contact stopped", () => import("./api").then(({ api }) => api.respondConversation(item.id, "OPT_OUT")))}><Ban/>Opt out</button></div></article>)}</section>
+      <section className="panel promises-panel"><div className="panel-heading"><div><span className="overline">Promise recovery pipeline</span><h3>Every promise, action, and stopping rule</h3></div><span className="count-badge">{activePromises} active</span></div><div className="promise-list">{promises.map((item) => <article className="promise-card" key={item.id}><div className="promise-head"><div className="object-icon"><CircleDollarSign/></div><div><strong>{money(item.amount)}</strong><span>{item.customerRef} · due {date(item.data.dueAt)}</span></div><Pill value={item.status}/></div><PromiseFlow item={item} now={now}/><div className="promise-card-bottom"><div className="confidence"><span>Promise confidence</span><div><i style={{ width: `${item.data.confidence * 100}%` }}/></div><strong>{percent(item.data.confidence)}</strong></div><p><ShieldCheck/>{item.data.stoppingRule}</p>{!["KEPT", "CANCELLED"].includes(item.status) && <div className="card-actions"><button disabled={busy} onClick={() => void mutate("Payment verified; promise pipeline closed", () => import("./api").then(({ api }) => api.updatePromise(item.id, "KEPT")))}><Check/>Mark payment received</button>{item.status === "OPEN" && <button className="secondary-button" disabled={busy} onClick={() => void mutate("Promise missed; one reminder scheduled in 5 minutes", () => import("./api").then(({ api }) => api.updatePromise(item.id, "MISSED")))}><Clock3/>Mark missed</button>}</div>}</div></article>)}</div></section></div>
   </div>;
 }

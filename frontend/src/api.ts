@@ -59,7 +59,7 @@ export const api = {
   verifyRazorpayTestRun: (runId: string, paymentId: string, orderId: string, signature: string) => request<RazorpayTestRun>(`/api/razorpay-test/runs/${runId}/verify`, {
     method: "POST", body: JSON.stringify({ paymentId, orderId, signature })
   }),
-  runWorker: () => request<{ claimed: number; completed: number; ignored: number; failed: number; swarmsAdvanced: number }>("/api/worker/run", { method: "POST" }),
+  runWorker: () => request<{ claimed: number; completed: number; ignored: number; failed: number; swarmsAdvanced: number; promisesAdvanced: number }>("/api/worker/run", { method: "POST" }),
   approve: (id: string) => request<Action>(`/api/actions/${id}/approve`, { method: "POST" }),
   execute: (id: string) => request<Action>(`/api/actions/${id}/execute`, { method: "POST" }),
   whatsapp: (id: string) => request<WhatsAppDelivery>(`/api/actions/${id}/whatsapp`, {
