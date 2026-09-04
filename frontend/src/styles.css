@@ -524,3 +524,31 @@ button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{ou
 .smart-session>div{display:flex;align-items:center;gap:8px}.smart-session>div:first-child>svg{color:#2670e8}.smart-session span{display:grid;gap:2px}.smart-session strong{font-size:13px}.smart-session small{font-size:11px;color:#6a7890}.smart-session a{margin:0}.smart-session button{min-height:30px;padding:0 9px;font-size:11px}
 .counterfactual-card{display:flex;align-items:flex-start;gap:9px;margin-top:10px;padding:10px 11px;border:1px solid #e2dcff;border-radius:7px;background:#f7f4ff;color:#6246ca}.counterfactual-card svg{flex:0 0 auto}.counterfactual-card>div{display:grid;gap:3px}.counterfactual-card span{font-size:10px;text-transform:uppercase;font-weight:800;letter-spacing:.06em}.counterfactual-card strong{font-size:12px;color:#28344e}.counterfactual-card small{font-size:11px;line-height:1.45;color:#66728a}
 @media(max-width:520px){.smart-session{align-items:flex-start;flex-direction:column}}
+
+/* Scenario Lab is the launchpad for every merchant-facing Revenue Autopilot demo. */
+.revenue-demo-launcher{margin:20px 0 0;overflow:hidden}
+.revenue-demo-launcher>.panel-heading{margin:0;padding:20px 22px;border-bottom:1px solid #e2e7ef;background:linear-gradient(105deg,#fff 35%,#f2f6ff)}
+.revenue-demo-launcher>.panel-heading h3{margin:4px 0 0;font-size:18px}
+.revenue-demo-launcher>.panel-heading p{max-width:760px;margin:6px 0 0;color:#657188;font-size:12px;line-height:1.55}
+.revenue-demo-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0}
+.revenue-demo-grid>article{min-height:154px;padding:18px 20px;display:grid;grid-template-columns:44px 1fr;grid-template-rows:1fr auto;gap:8px 14px;border-bottom:1px solid #e7ebf1;background:#fff}
+.revenue-demo-grid>article:nth-child(odd){border-right:1px solid #e7ebf1}
+.revenue-demo-grid>article:hover{background:#fafcff}
+.revenue-demo-icon{width:44px;height:44px;border-radius:11px;display:grid;place-items:center}
+.revenue-demo-icon svg{width:21px}
+.revenue-demo-icon.accent-red{background:#fff0ef;color:#c74a43}.revenue-demo-icon.accent-green{background:#e9f8f1;color:#08875b}.revenue-demo-icon.accent-amber{background:#fff4df;color:#b96e08}.revenue-demo-icon.accent-violet{background:#f0ebff;color:#7257dd}.revenue-demo-icon.accent-blue{background:#eaf2ff;color:#2b70df}
+.revenue-demo-grid>article>div:nth-child(2){min-width:0;display:grid;align-content:start;gap:4px}
+.revenue-demo-grid>article>div:nth-child(2)>span{color:#2a6fdf;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.055em}
+.revenue-demo-grid>article>div:nth-child(2)>strong{color:#202a3b;font-size:15px}
+.revenue-demo-grid>article p{margin:0;color:#667287;font-size:12px;line-height:1.5}
+.revenue-demo-actions{grid-column:2;display:flex;align-items:center;justify-content:flex-end;gap:8px;padding-top:5px}
+.revenue-demo-actions button{height:36px;border-radius:7px;padding:0 12px;font-size:11px;font-weight:800}
+.demo-view-link{border:1px solid #d4dce9;background:#fff;color:#516079}
+.demo-run-button{border:0;background:#2d72e7;color:#fff;display:flex;align-items:center;gap:6px;box-shadow:0 7px 16px rgba(45,114,231,.16)}
+.demo-run-button svg{width:14px}
+.demo-run-button:disabled{opacity:.55;box-shadow:none}
+.result-actions{flex-wrap:wrap}
+.result-actions .result-destination{border-color:#2d72e7;background:#2d72e7;color:#fff}
+.result-actions .result-destination svg{width:15px}
+@media(max-width:900px){.revenue-demo-grid{grid-template-columns:1fr}.revenue-demo-grid>article:nth-child(odd){border-right:0}}
+@media(max-width:560px){.revenue-demo-launcher>.panel-heading{align-items:flex-start}.revenue-demo-grid>article{grid-template-columns:40px 1fr;padding:16px}.revenue-demo-actions{grid-column:1/-1;justify-content:stretch}.revenue-demo-actions button{flex:1}.revenue-demo-grid>article p{font-size:11px}}

@@ -179,7 +179,7 @@ export async function buildApplication(options: BuildOptions = {}): Promise<AppC
     ? new RecoveryEngine(scenarioRepository, scenarioProvider, deterministic, scenarioConfig, clock)
     : null;
   const demoRunner = scenarioRepository && scenarioProvider && scenarioIngestor && scenarioEngine
-    ? new DemoScenarioRunner(scenarioConfig, scenarioRepository, scenarioProvider, scenarioEngine, scenarioIngestor, clock)
+    ? new DemoScenarioRunner(scenarioConfig, scenarioRepository, scenarioProvider, scenarioEngine, scenarioIngestor, clock, revenueIntelligence)
     : null;
   const app = Fastify({ logger: options.logger ?? false, bodyLimit: 1_048_576 });
   const realtimeCleanups = new Set<() => void>();

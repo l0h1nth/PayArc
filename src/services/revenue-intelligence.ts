@@ -19,6 +19,16 @@ import { RecoveryRepository } from "../storage/database.js";
 
 type AnyRevenueData = IncidentData | JourneyData | SubscriptionData | ReceivableData | MandateData | ConversationData | PromiseData;
 
+export type RevenueDemoSurface = "overview" | "portfolio" | "incidents" | "journeys" | "subscriptions" | "receivables" | "conversations";
+
+export type RevenueDemoProvision = {
+  surface: RevenueDemoSurface;
+  primaryObjectId: string | null;
+  createdObjectIds: string[];
+  outcome: string;
+  observed: string;
+};
+
 const promiseReminderDelaySeconds = 300;
 const promiseGracePeriodSeconds = 86_400;
 const defaultPromiseContactLimit = 1;
@@ -399,6 +409,172 @@ export class RevenueIntelligenceService {
     const stored = this.repository.upsertRevenueObject(journey, "checkout-sdk");
     this.repository.recordRevenueOperation({ objectId: id, operation: "REGISTER_CHECKOUT_JOURNEY", status: "SUCCEEDED", output: { orderId: input.orderId ?? null }, now });
     return stored;
+  }
+
+  provisionRevenueDemo(surface: RevenueDemoSurface): RevenueDemoProvision {
+    const now = this.clock.now();
+    const suffix = randomUUID().replaceAll("-", "").slice(0, 10);
+    const finish = (primaryObjectId: string | null, createdObjectIds: string[], outcome: string, observed: string) => {
+      this.optimizePortfolio(6);
+      this.repository.recordRevenueOperation({
+        ...(primaryObjectId ? { objectId: primaryObjectId } : {}),
+        operation: "PROVISION_SCENARIO_LAB_DEMO",
+        status: "SUCCEEDED",
+        input: { surface },
+        output: { created: createdObjectIds.length, outcome },
+        now
+      });
+      return { surface, primaryObjectId, createdObjectIds, outcome, observed };
+    };
+
+    if (surface === "incidents") {
+      const entityId = `demo_bank_${suffix}`;
+      this.observeProviderEvent({
+        providerEventId: `evt_demo_downtime_${suffix}`,
+        type: "payment.downtime.started",
+        occurredAt: now,
+        entityType: "payment_downtime",
+        entityId,
+        amount: 989_000,
+        currency: "INR",
+        method: "UPI",
+        errorSource: "Demo Bank",
+        untrustedTextSignals: []
+      });
+      const id = `inc_provider_${entityId}`;
+      return finish(id, [id], "CIRCUIT_BREAKER_ACTIVE", "Created a live payment degradation incident; unsafe retries are now held for merchant review");
+    }
+
+    if (surface === "journeys") {
+      const journey = this.registerJourney({
+        customerRef: `cus_DEMO_${suffix}`,
+        orderId: `order_demo_${suffix}`,
+        amount: 249_900,
+        currency: "INR",
+        originalCheckoutUrl: `https://rzp.io/i/demo-${suffix}`,
+        checkoutExpiresAt: now + 18 * 3_600,
+        paymentMethod: "card"
+      });
+      const abandoned = this.signalJourney(journey.id, { stage: "ABANDONED", customerActive: false, paymentMethod: "card" });
+      return finish(abandoned.id, [abandoned.id], "ABANDONED", "Created a fresh abandoned checkout with a reusable Razorpay payment path and a five-minute recovery cooldown");
+    }
+
+    if (surface === "subscriptions") {
+      const subscriptionId = `sub_demo_${suffix}`;
+      const mandateId = `mandate_demo_${suffix}`;
+      this.repository.upsertRevenueObject(object<SubscriptionData>({
+        id: subscriptionId,
+        kind: "SUBSCRIPTION",
+        status: "HALTED",
+        amount: 129_900,
+        currency: "INR",
+        priority: 99,
+        customerRef: `cus_DEMO_${suffix}`,
+        data: {
+          plan: "PayArc Demo Pro",
+          invoiceId: `inv_demo_${suffix}`,
+          failedAttempts: 4,
+          providerRetryAt: null,
+          mandateStatus: "TOKEN_EXPIRED",
+          recommendedAction: "REQUEST_PAYMENT_METHOD_UPDATE",
+          nextActionAt: now,
+          outstandingAmount: 129_900
+        }
+      }, now), "scenario-lab");
+      this.repository.upsertRevenueObject(object<MandateData>({
+        id: mandateId,
+        kind: "MANDATE",
+        status: "SEQUENCING",
+        amount: 129_900,
+        currency: "INR",
+        priority: 98,
+        customerRef: `cus_DEMO_${suffix}`,
+        data: {
+          rail: "UPI AutoPay",
+          attempt: 1,
+          maxAttempts: 3,
+          bankHealthy: true,
+          duplicateDebitRisk: false,
+          nextAttemptAt: now + 6 * 3_600,
+          steps: [
+            { label: "Provider-managed retry", status: "DONE", scheduledAt: now - 3_600 },
+            { label: "Preferred success window", status: "CURRENT", scheduledAt: now + 6 * 3_600 },
+            { label: "Mandate update", status: "QUEUED", scheduledAt: null },
+            { label: "Manual checkout", status: "QUEUED", scheduledAt: null }
+          ]
+        }
+      }, now), "scenario-lab");
+      return finish(subscriptionId, [subscriptionId, mandateId], "RETRY_SEQUENCE_READY", "Created a halted subscription and a bounded UPI AutoPay retry sequence with duplicate-debit protection");
+    }
+
+    if (surface === "receivables") {
+      const id = `recv_demo_${suffix}`;
+      this.repository.upsertRevenueObject(object<ReceivableData>({
+        id,
+        kind: "RECEIVABLE",
+        status: "BLOCKED",
+        amount: 845_000,
+        currency: "INR",
+        priority: 100,
+        customerRef: `org_DEMO_${suffix}`,
+        data: {
+          buyer: `Demo Buyer ${suffix.slice(-4).toUpperCase()}`,
+          invoiceNumber: `INV-DEMO-${suffix.slice(-4).toUpperCase()}`,
+          dueAt: now - 18 * 86_400,
+          daysOverdue: 18,
+          blocker: "PO_NUMBER_MISSING",
+          contactChannel: "EMAIL",
+          promisedAt: null,
+          recoveredAmount: 0,
+          nextAction: "RESOLVE_DOCUMENT_BLOCKER",
+          contactAttempts: 0,
+          lastContactAt: null,
+          response: null,
+          linkedPromiseId: null,
+          lastActivity: "Scenario Lab created a fresh invoice blocker for the merchant demo"
+        }
+      }, now), "scenario-lab");
+      return finish(id, [id], "BLOCKER_DETECTED", "Created a fresh overdue invoice with a missing-PO blocker; resolve it before contacting the buyer");
+    }
+
+    if (surface === "conversations") {
+      const id = `conv_demo_${suffix}`;
+      this.repository.upsertRevenueObject(object<ConversationData>({
+        id,
+        kind: "CONVERSATION",
+        status: "AWAITING_CUSTOMER",
+        amount: 327_500,
+        currency: "INR",
+        priority: 99,
+        customerRef: `org_DEMO_${suffix}`,
+        data: {
+          channel: "VOICE",
+          language: "HINGLISH",
+          consent: true,
+          sentiment: "NEUTRAL",
+          intent: "UNRESOLVED",
+          messages: [{ role: "AGENT", text: "Namaste, aapke invoice ka payment pending hai. Kya aap payment date confirm kar sakte hain?", at: now }],
+          linkedReceivableId: null,
+          linkedPromiseId: null,
+          nextAction: "CAPTURE_STRUCTURED_INTENT"
+        }
+      }, now), "scenario-lab");
+      const conversation = this.respondConversation(id, "PROMISE_TOMORROW");
+      return finish(conversation.id, [conversation.id, conversation.data.linkedPromiseId!], "PROMISE_CAPTURED", "Created a consented Hinglish conversation, captured a promise for tomorrow, and started its visible stopping-rule pipeline");
+    }
+
+    if (surface === "portfolio") {
+      const journey = this.provisionRevenueDemo("journeys");
+      const receivable = this.provisionRevenueDemo("receivables");
+      const recommendations = this.optimizePortfolio(6);
+      const selected = recommendations.filter((item) => item.selected).length;
+      return finish(recommendations[0]?.objectId ?? null, [...journey.createdObjectIds, ...receivable.createdObjectIds], "PORTFOLIO_OPTIMIZED", `Added fresh checkout and receivable obligations, then selected ${selected} highest-incremental-value interventions`);
+    }
+
+    const demos = (["incidents", "journeys", "subscriptions", "receivables", "conversations"] as const)
+      .map((demoSurface) => this.provisionRevenueDemo(demoSurface));
+    const batch = this.runBatch();
+    return finish(null, demos.flatMap((demo) => demo.createdObjectIds), "AUTOPILOT_BATCH_COMPLETE", `Provisioned every revenue workflow and executed a bounded portfolio batch: ${batch.processed} selected, ${batch.recovered / 100} INR recovered, ${batch.protected / 100} INR protected`);
   }
 
   signalJourney(id: string, signal: {

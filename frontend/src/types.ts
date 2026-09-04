@@ -165,6 +165,9 @@ export type DemoScenario = {
   expected: string;
   events: string[];
   accent: string;
+  mode?: "sandbox" | "workspace";
+  destinationView?: "overview" | "portfolio" | "incidents" | "journeys" | "subscriptions" | "receivables" | "conversations";
+  destinationLabel?: string;
 };
 
 export type ScenarioResult = {
@@ -178,6 +181,7 @@ export type ScenarioResult = {
   workerRuns: Array<{ claimed: number; completed: number; ignored: number; failed: number }>;
   recentAudit: AuditEntry[];
   eventTrace: EventSummary[];
+  outcome: string;
 };
 
 export type ScenarioRunSummary = {
@@ -193,6 +197,7 @@ export type ScenarioRunSummary = {
   workerRunCount: number;
   actionCount: number;
   auditProofCount: number;
+  destinationView?: "overview" | "portfolio" | "incidents" | "journeys" | "subscriptions" | "receivables" | "conversations";
 };
 
 export type RazorpayTestRun = {

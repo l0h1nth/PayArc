@@ -18,16 +18,22 @@ test("scenario catalog exposes the complete judge-facing event surface", async (
   const response = await context.app.inject({ method: "GET", url: "/api/demo/scenarios" });
   assert.equal(response.statusCode, 200);
   const body = response.json();
-  assert.equal(body.count, 15);
+  assert.equal(body.count, 22);
   assert.deepEqual(
     new Set(body.scenarios.map((scenario: { category: string }) => scenario.category)),
-    new Set(["Payment intelligence", "Subscriptions", "Recovery lifecycle", "Resilience & security"])
+    new Set(["Revenue Autopilot", "Payment intelligence", "Subscriptions", "Recovery lifecycle", "Resilience & security"])
   );
   assert.ok(body.scenarios.every((scenario: { expected?: string; events?: string[] }) => scenario.expected && scenario.events?.length));
+  const workspaceDemos = body.scenarios.filter((scenario: { mode?: string }) => scenario.mode === "workspace");
+  assert.equal(workspaceDemos.length, 7);
+  assert.deepEqual(
+    new Set(workspaceDemos.map((scenario: { destinationView: string }) => scenario.destinationView)),
+    new Set(["overview", "portfolio", "incidents", "journeys", "subscriptions", "receivables", "conversations"])
+  );
   await context.close();
 });
 
-test("all 15 scenarios execute through real ingestion and worker boundaries", async () => {
+test("all 22 scenarios execute through their real workspace or isolated boundaries", async () => {
   const context = await setup();
   const catalog = (await context.app.inject({ method: "GET", url: "/api/demo/scenarios" })).json().scenarios as Array<{ id: string }>;
   const results = new Map<string, Record<string, any>>();
@@ -59,12 +65,28 @@ test("all 15 scenarios execute through real ingestion and worker boundaries", as
   assert.equal(results.get("duplicate-replay")!.security.duplicateDetected, true);
   assert.equal(results.get("duplicate-replay")!.security.jobsClaimed, 1);
   assert.equal(results.get("stale-failure")!.security.sourceOfTruthProtected, true);
+  assert.equal(results.get("autopilot-overview")!.outcome, "AUTOPILOT_BATCH_COMPLETE");
+  assert.equal(results.get("portfolio-optimizer-demo")!.outcome, "PORTFOLIO_OPTIMIZED");
+  assert.equal(results.get("payment-incident-demo")!.outcome, "CIRCUIT_BREAKER_ACTIVE");
+  assert.equal(results.get("checkout-journey-demo")!.outcome, "ABANDONED");
+  assert.equal(results.get("recurring-revenue-demo")!.outcome, "RETRY_SEQUENCE_READY");
+  assert.equal(results.get("b2b-receivable-demo")!.outcome, "BLOCKER_DETECTED");
+  assert.equal(results.get("promise-voice-demo")!.outcome, "PROMISE_CAPTURED");
+  assert.ok(results.get("autopilot-overview")!.security.workspaceObjectsCreated >= 7);
+
+  const revenue = (await context.app.inject({ method: "GET", url: "/api/revenue/snapshot" })).json();
+  assert.ok(revenue.incidents.some((item: { id: string }) => item.id.startsWith("inc_provider_demo_bank_")));
+  assert.ok(revenue.journeys.some((item: { id: string }) => item.id.startsWith("journey_")));
+  assert.ok(revenue.subscriptions.some((item: { id: string }) => item.id.startsWith("sub_demo_")));
+  assert.ok(revenue.receivables.some((item: { id: string }) => item.id.startsWith("recv_demo_")));
+  assert.ok(revenue.conversations.some((item: { id: string }) => item.id.startsWith("conv_demo_")));
+  assert.ok(revenue.promises.some((item: { id: string }) => item.id.startsWith("promise_demo_")));
 
   assert.ok([...results.values()].every((result) => result.recentAudit.length > 0));
   const historyResponse = await context.app.inject({ method: "GET", url: "/api/demo/runs" });
   assert.equal(historyResponse.statusCode, 200);
   const history = historyResponse.json();
-  assert.equal(history.count, 15);
+  assert.equal(history.count, 22);
   assert.equal(history.runs[0].scenarioId, "stale-failure");
   assert.ok(history.runs.every((run: { runId?: string; observed?: string }) => run.runId && run.observed));
   const fullRecoveryRun = history.runs.find((run: { scenarioId: string }) => run.scenarioId === "full-recovery");

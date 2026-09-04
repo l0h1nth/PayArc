@@ -5,19 +5,30 @@ import { MockPaymentProvider } from "../providers/mock-payment-provider.js";
 import { signWebhook } from "../security/webhook.js";
 import type { EventSummary, RecoveryRepository } from "../storage/database.js";
 import type { RecoveryEngine } from "./recovery-engine.js";
+import type { RevenueDemoSurface, RevenueIntelligenceService } from "./revenue-intelligence.js";
 import { WebhookAuthError, type WebhookIngestor } from "./webhook-ingestor.js";
 
 export type DemoScenario = {
   id: string;
-  category: "Payment intelligence" | "Subscriptions" | "Recovery lifecycle" | "Resilience & security";
+  category: "Revenue Autopilot" | "Payment intelligence" | "Subscriptions" | "Recovery lifecycle" | "Resilience & security";
   title: string;
   description: string;
   expected: string;
   events: string[];
   accent: "violet" | "blue" | "green" | "amber" | "red";
+  mode?: "sandbox" | "workspace";
+  destinationView?: RevenueDemoSurface;
+  destinationLabel?: string;
 };
 
 export const demoScenarios: DemoScenario[] = [
+  { id: "autopilot-overview", category: "Revenue Autopilot", title: "Full autopilot batch", description: "Provision fresh examples across every revenue workflow and execute one bounded, portfolio-ranked batch.", expected: "Every page populated → safe batch executed", events: ["revenue.detected", "portfolio.optimized", "recovery.batch.executed"], accent: "green", mode: "workspace", destinationView: "overview", destinationLabel: "Overview" },
+  { id: "portfolio-optimizer-demo", category: "Revenue Autopilot", title: "Portfolio optimizer", description: "Add fresh checkout and receivable obligations, then rank them by expected incremental value.", expected: "Fresh obligations → ranked intervention budget", events: ["revenue.detected", "portfolio.optimized"], accent: "violet", mode: "workspace", destinationView: "portfolio", destinationLabel: "Portfolio optimizer" },
+  { id: "payment-incident-demo", category: "Revenue Autopilot", title: "Payment degradation", description: "Create a live provider incident that engages the circuit breaker and protects retry traffic.", expected: "Failure spike → circuit breaker active", events: ["payment.downtime.started"], accent: "red", mode: "workspace", destinationView: "incidents", destinationLabel: "Payment intelligence" },
+  { id: "checkout-journey-demo", category: "Revenue Autopilot", title: "Checkout abandonment", description: "Create a fresh abandoned checkout with a still-valid Razorpay path and contact cooldown.", expected: "Abandonment → reuse existing checkout", events: ["checkout.opened", "checkout.abandoned"], accent: "blue", mode: "workspace", destinationView: "journeys", destinationLabel: "Checkout journeys" },
+  { id: "recurring-revenue-demo", category: "Revenue Autopilot", title: "Recurring retry sequence", description: "Create a halted subscription and a bounded mandate sequence with duplicate-debit guardrails.", expected: "Subscription halted → safe mandate sequence", events: ["subscription.halted", "mandate.retry.planned"], accent: "amber", mode: "workspace", destinationView: "subscriptions", destinationLabel: "Recurring revenue" },
+  { id: "b2b-receivable-demo", category: "Revenue Autopilot", title: "B2B invoice collection", description: "Create a fresh overdue invoice with a missing-PO blocker and the full resolution workflow.", expected: "Blocker detected → resolve → contact → outcome", events: ["invoice.overdue", "invoice.blocker.detected"], accent: "blue", mode: "workspace", destinationView: "receivables", destinationLabel: "B2B receivables" },
+  { id: "promise-voice-demo", category: "Revenue Autopilot", title: "Hinglish promise-to-pay", description: "Create a consented Hinglish conversation and convert the response into a timed promise pipeline.", expected: "Intent captured → promise timer → stopping rules", events: ["conversation.responded", "promise.created"], accent: "violet", mode: "workspace", destinationView: "conversations", destinationLabel: "Promises & voice" },
   { id: "incorrect-otp", category: "Payment intelligence", title: "Incorrect OTP", description: "Customer authentication failed, but a fresh hosted checkout can recover it.", expected: "Customer-actionable → recovery link", events: ["payment.failed"], accent: "violet" },
   { id: "insufficient-funds", category: "Payment intelligence", title: "Insufficient funds", description: "Avoid an immediate retry and recommend a delayed recovery attempt.", expected: "Recovery link with a 4-hour delay", events: ["payment.failed"], accent: "amber" },
   { id: "gateway-outage", category: "Payment intelligence", title: "Gateway outage", description: "A transient upstream failure is separated from customer-caused failures.", expected: "Transient provider → short cooldown", events: ["payment.failed"], accent: "blue" },
@@ -44,6 +55,7 @@ type ScenarioExecution = {
   security: Record<string, boolean | number | string>;
   recentAudit: Array<Record<string, unknown>>;
   metrics: Record<string, unknown>;
+  outcome: string;
 };
 
 export type ScenarioResult = ScenarioExecution & {
@@ -65,6 +77,7 @@ export type ScenarioRunSummary = {
   workerRunCount: number;
   actionCount: number;
   auditProofCount: number;
+  destinationView?: RevenueDemoSurface;
 };
 
 type FailureOptions = {
@@ -84,7 +97,8 @@ export class DemoScenarioRunner {
     private readonly provider: MockPaymentProvider,
     private readonly engine: RecoveryEngine,
     private readonly ingestor: WebhookIngestor,
-    private readonly clock: Clock
+    private readonly clock: Clock,
+    private readonly revenueIntelligence: RevenueIntelligenceService
   ) {}
 
   async run(id: string): Promise<ScenarioResult> {
@@ -94,6 +108,13 @@ export class DemoScenarioRunner {
     const existingAuditIds = new Set(this.repository.listAudit().map((entry) => Number(entry.id)));
     let execution: ScenarioExecution;
     switch (id) {
+      case "autopilot-overview": execution = this.runRevenueDemo(scenario, "overview"); break;
+      case "portfolio-optimizer-demo": execution = this.runRevenueDemo(scenario, "portfolio"); break;
+      case "payment-incident-demo": execution = this.runRevenueDemo(scenario, "incidents"); break;
+      case "checkout-journey-demo": execution = this.runRevenueDemo(scenario, "journeys"); break;
+      case "recurring-revenue-demo": execution = this.runRevenueDemo(scenario, "subscriptions"); break;
+      case "b2b-receivable-demo": execution = this.runRevenueDemo(scenario, "receivables"); break;
+      case "promise-voice-demo": execution = this.runRevenueDemo(scenario, "conversations"); break;
       case "incorrect-otp": execution = await this.runFailure(scenario, { reason: "incorrect_otp", source: "customer" }); break;
       case "insufficient-funds": execution = await this.runFailure(scenario, { reason: "insufficient_funds", source: "customer" }); break;
       case "gateway-outage": execution = await this.runFailure(scenario, { reason: "gateway_technical_error", source: "gateway" }); break;
@@ -139,12 +160,13 @@ export class DemoScenarioRunner {
       title: result.scenario.title,
       accent: result.scenario.accent,
       observed: result.observed,
-      outcome: result.case?.status ?? (result.security.signatureRejected ? "REJECTED" : "NO_CASE"),
+      outcome: result.outcome,
       caseId: result.case?.id ?? null,
       eventCount: result.eventTrace.length,
       workerRunCount: result.workerRuns.length,
       actionCount: result.actions.length,
-      auditProofCount: result.recentAudit.length
+      auditProofCount: result.recentAudit.length,
+      ...(result.scenario.destinationView ? { destinationView: result.scenario.destinationView } : {})
     }));
   }
 
@@ -218,7 +240,8 @@ export class DemoScenarioRunner {
     observed: string,
     recoveryCase: RecoveryCase | null,
     workerRuns: ScenarioResult["workerRuns"],
-    security: ScenarioResult["security"] = {}
+    security: ScenarioResult["security"] = {},
+    outcome?: string
   ): ScenarioExecution {
     const audit = this.repository.listAudit();
     return {
@@ -229,8 +252,29 @@ export class DemoScenarioRunner {
       workerRuns,
       security,
       recentAudit: audit.slice(-16).reverse(),
-      metrics: this.repository.metrics()
+      metrics: this.repository.metrics(),
+      outcome: outcome ?? recoveryCase?.status ?? (security.signatureRejected ? "REJECTED" : "NO_CASE")
     };
+  }
+
+  private runRevenueDemo(scenario: DemoScenario, surface: RevenueDemoSurface): ScenarioExecution {
+    const provision = this.revenueIntelligence.provisionRevenueDemo(surface);
+    this.repository.appendAudit({
+      kind: "REVENUE_AUTOPILOT_DEMO_PROVISIONED",
+      actor: "scenario-lab",
+      data: {
+        scenarioId: scenario.id,
+        surface,
+        objectsCreated: provision.createdObjectIds.length,
+        primaryObjectId: provision.primaryObjectId
+      },
+      now: this.clock.now()
+    });
+    return this.result(scenario, provision.observed, null, [], {
+      workspaceObjectsCreated: provision.createdObjectIds.length,
+      primaryObject: provision.primaryObjectId ?? "portfolio",
+      destination: scenario.destinationLabel ?? surface
+    }, provision.outcome);
   }
 
   private async runFailure(scenario: DemoScenario, options: FailureOptions): Promise<ScenarioExecution> {

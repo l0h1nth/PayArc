@@ -320,14 +320,15 @@ Important defaults are documented in [.env.example](./.env.example):
 
 ## Scenario Lab
 
-The lab has two boundaries:
+The lab has three clearly labeled boundaries:
 
+- **Revenue Autopilot workspace demos** create a fresh, high-priority object on each merchant page: Overview, Portfolio Optimizer, Payment Intelligence, Checkout Journeys, Recurring Revenue, B2B Receivables, and Promises & Voice. Every completed run offers a direct **Open result** path so the presenter can continue the page-specific workflow.
 - **Isolated scenarios** exercise ingestion, decision, policy, workers, outcomes, analytics, and security without contacting Razorpay.
 - **Real Razorpay Test Mode scenarios** create genuine Test Orders, launch hosted Checkout, and accept cases only through signed Razorpay webhooks.
 
-The scenario catalog covers incorrect OTP, insufficient funds, gateway outage, expired card, merchant misconfiguration, risk/compliance block, subscription pending/halted, end-to-end recovery, partial payment, checkout abandonment, B2B receivable, promise-to-pay, downtime circuit breaker, and adversarial webhook handling.
+The one-click merchant demos cover a full autopilot batch, portfolio ranking, payment degradation, checkout abandonment, mandate sequencing, B2B invoice collection, and a consented Hinglish promise-to-pay pipeline. The isolated catalog additionally covers incorrect OTP, insufficient funds, gateway outage, expired card, merchant misconfiguration, risk/compliance block, subscription pending/halted, end-to-end recovery, partial payment, link expiry, downtime handling, and adversarial webhook controls.
 
-Scenario events are labeled and isolated so they cannot be mistaken for production revenue.
+Workspace demos are labeled as demo records. Provider and security simulations remain isolated so they cannot be mistaken for merchant revenue or genuine Razorpay traffic.
 
 ## Security and safety invariants
 
