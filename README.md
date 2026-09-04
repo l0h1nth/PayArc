@@ -9,8 +9,9 @@ The merchant manages exceptions. PayArc handles eligible recovery at transaction
 ## Architecture
 
 ```mermaid
-flowchart LR
+flowchart TB
     subgraph Sources[Verified inputs]
+        direction LR
         RZP[Razorpay webhooks]
         SDK[Checkout journey signals]
         WA[WhatsApp replies]
@@ -18,6 +19,7 @@ flowchart LR
     end
 
     subgraph Control[PayArc control plane]
+        direction LR
         VERIFY[Signature verification<br/>deduplication and redaction]
         TWIN[Revenue Digital Twin<br/>one obligation, one state]
         AI[AI decision agent<br/>diagnosis and next-best action]
@@ -26,12 +28,14 @@ flowchart LR
     end
 
     subgraph Effects[Authorized effects]
+        direction LR
         PATH[Reuse checkout or<br/>create bounded payment path]
         MESSAGE[Consented WhatsApp<br/>or merchant escalation]
         STOP[Stop, wait, suppress<br/>or request human review]
     end
 
     subgraph Proof[Evidence and merchant control]
+        direction LR
         OUTCOME[Provider-verified outcome]
         METRICS[Causal recovery metrics]
         AUDIT[Hash-chained audit ledger]
@@ -72,58 +76,84 @@ It prefers the path already available—an active checkout or provider-managed r
 
 ## Revenue Autopilot pipelines
 
-Each sidebar page represents one part of the same revenue graph. This diagram shows what enters each pipeline, what PayArc decides, and where it stops.
+Each sidebar page represents one part of the same revenue graph. The flows are separated so they remain readable on GitHub and mobile screens.
+
+### 1. Overview
+
+Combines every obligation and verified outcome into live recovery totals and an exception-only merchant queue.
 
 ```mermaid
-flowchart TB
-    subgraph P1[Overview]
-        direction LR
-        O1[All revenue obligations] --> O2[Live risk and recovery totals] --> O3[Exceptions for merchant]
-    end
-
-    subgraph P2[Portfolio optimizer]
-        direction LR
-        P21[Recoverable obligations] --> P22[Estimate natural vs intervention lift] --> P23[Rank within action budget] --> P24[Run bounded batch]
-    end
-
-    subgraph P3[Payment intelligence]
-        direction LR
-        P31[Correlated failure burst] --> P32[Engage circuit breaker] --> P33[Wait for quiet window] --> P34[Release 25 percent canary]
-    end
-
-    subgraph P4[Checkout journeys]
-        direction LR
-        P41[Observe customer session] --> P42{Customer active?}
-        P42 -->|Yes| P43[Suppress duplicate outreach]
-        P42 -->|No| P44[Reuse valid checkout]
-        P44 --> P45[Bounded link only if expired]
-    end
-
-    subgraph P5[Recurring revenue]
-        direction LR
-        P51[Subscription or mandate failure] --> P52[Honor provider retry] --> P53[Check bank and duplicate-debit risk] --> P54[Advance one safe step]
-    end
-
-    subgraph P6[B2B receivables]
-        direction LR
-        P61[Overdue invoice] --> P62[Resolve PO or GST blocker] --> P63[Contact buyer] --> P64[Promise, dispute or paid] --> P65[Track or reconcile]
-    end
-
-    subgraph P7[Promises and voice]
-        direction LR
-        P71[Consented Hinglish conversation] --> P72[Capture structured intent] --> P73[Pause until promise due] --> P74[One reminder] --> P75[Paid, opt-out or merchant review]
-    end
+flowchart LR
+    A[All revenue obligations] --> B[Live risk and recovery totals] --> C[Merchant exceptions]
 ```
 
-| Page | What PayArc automates | What the merchant sees |
-| --- | --- | --- |
-| **Overview** | Aggregates every obligation and verified outcome | At-risk, incremental recovered, protected revenue, promises, and exceptions |
-| **Portfolio optimizer** | Ranks work by expected incremental value after natural recovery, cost, fatigue, and risk | Selected and deferred actions inside a daily execution budget |
-| **Payment intelligence** | Clusters transient failures, holds retries, and performs staged recovery | Failure rate, affected value, retries prevented, and canary release |
-| **Checkout journeys** | Observes active shoppers and conserves valid Razorpay checkout paths | Session stage, current decision, timer, and recovered state |
-| **Recurring revenue** | Sequences subscription and mandate attempts without duplicate debit | Provider retry, method-update requirement, and bounded attempt plan |
-| **B2B receivables** | Resolves invoice blockers before outreach and records the buyer outcome | `Resolve blocker → Contact → Promise / Dispute / Paid` |
-| **Promises & voice** | Converts consented Hinglish responses into auditable promises and stopping rules | Live pipeline, due timer, reminder budget, escalation, and closure |
+### 2. Portfolio optimizer
+
+Ranks obligations by expected incremental value—not gross value—and acts only within the configured budget.
+
+```mermaid
+flowchart LR
+    A[Recoverable obligations] --> B[Estimate natural recovery] --> C[Predict intervention lift] --> D[Select within budget] --> E[Run bounded batch]
+```
+
+### 3. Payment intelligence
+
+Turns a burst of related failures into one controlled provider incident instead of many harmful retries.
+
+```mermaid
+flowchart LR
+    A[Correlated failure burst] --> B[Engage circuit breaker] --> C[Hold unsafe retries] --> D[Five-minute quiet window] --> E[Release 25% canary]
+```
+
+### 4. Checkout journeys
+
+Observes customer activity and preserves the original checkout before considering a replacement link.
+
+```mermaid
+flowchart TD
+    A[Observe checkout session] --> B{Customer still active?}
+    B -->|Yes| C[Wait and suppress outreach]
+    B -->|No| D{Original checkout valid?}
+    D -->|Yes| E[Reuse existing checkout]
+    D -->|No| F[Create one bounded recovery path]
+    C --> G[Verify payment or expiry]
+    E --> G
+    F --> G
+```
+
+### 5. Recurring revenue
+
+Advances only the next safe subscription or mandate step and blocks duplicate-debit risk.
+
+```mermaid
+flowchart LR
+    A[Subscription or mandate fails] --> B[Honor provider retry] --> C[Check bank and debit risk] --> D[Advance one safe step] --> E[Recover or stop]
+```
+
+### 6. B2B receivables
+
+Fixes merchant-side document blockers before contacting the buyer, then records an authoritative outcome.
+
+```mermaid
+flowchart LR
+    A[Invoice overdue] --> B[Resolve PO or GST blocker] --> C[Contact buyer] --> D{Buyer response}
+    D -->|Promise| E[Track promise]
+    D -->|Dispute| F[Merchant review]
+    D -->|Paid| G[Reconcile and stop]
+```
+
+### 7. Promises & voice
+
+Converts a consented Hinglish response into a timed, auditable workflow with a strict contact limit.
+
+```mermaid
+flowchart LR
+    A[Consented conversation] --> B[Capture structured intent] --> C[Pause until due] --> D[Verify payment]
+    D -->|Unpaid| E[Send one reminder]
+    E --> F[Merchant review]
+    D -->|Paid| G[Close and stop]
+    B -->|Opt-out| H[Stop all contact]
+```
 
 ## What makes PayArc different
 
