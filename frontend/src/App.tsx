@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import {
   Activity, AlertTriangle, ArrowUpRight, BarChart3, Bell, Bot, Cable, Check,
   CheckCircle2, ChevronDown, ChevronRight, Circle, Clock3, Copy, CreditCard,
   BookOpen, Building2, ExternalLink, FileClock, FlaskConical, IndianRupee, LayoutDashboard,
-  ListFilter, LockKeyhole, Menu, PanelLeftClose, Pause, Play, Radio, RefreshCw,
+  ListFilter, LockKeyhole, LogOut, Menu, PanelLeftClose, Pause, Play, Radio, RefreshCw,
   MessageSquareText, Network, Route, Search, Send, Server, ShieldCheck, TestTube2, TrendingUp, WalletCards, Webhook, X, Zap
 } from "lucide-react";
 import {
@@ -12,7 +12,7 @@ import {
 } from "recharts";
 import { api, type RealtimeState, type WhatsAppDelivery } from "./api";
 import type {
-  Action, AuditEntry, CaseDetail, ChannelReadiness, DemoScenario, EventSummary, Metrics, PublicConfig,
+  Action, AuditEntry, AuthSessionState, CaseDetail, ChannelReadiness, DemoScenario, EventSummary, Metrics, PublicConfig,
   RazorpayTestLab, RazorpayTestRun, RecoveryCase, ScenarioResult, ScenarioRunSummary, ViewId
 } from "./types";
 import type { RevenueSnapshot } from "./revenue-types";
@@ -475,6 +475,40 @@ function GuideView({ onView }: { onView: (view: ViewId) => void }) {
   ].map(([step, title, text]) => <div key={step}><i>{step}</i><div><strong>{title}</strong><span>{text}</span></div></div>)}</div></section><section className="panel feature-manual"><div className="panel-heading"><div><span className="overline">Feature manual</span><h3>What every page does</h3></div></div><div className="guide-grid">{pages.map((page) => <button key={page.view} onClick={() => onView(page.view)}><div><strong>{page.title}</strong><span>{page.purpose}</span><small>{page.action}</small></div><ChevronRight/></button>)}</div></section></div>;
 }
 
+function MerchantLogin({ busy, error, demoMode, onLogin }: {
+  busy: boolean;
+  error: string | null;
+  demoMode: boolean;
+  onLogin: (email: string, password: string) => Promise<void>;
+}) {
+  const [email, setEmail] = useState("merchant@payarc.test");
+  const [password, setPassword] = useState("");
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    if (email.trim() && password) void onLogin(email, password);
+  };
+  const useDemo = (role: "owner" | "operator") => {
+    setEmail(role === "owner" ? "merchant@payarc.test" : "operator@payarc.test");
+    setPassword(role === "owner" ? "PayArcMerchant!2026" : "PayArcOperator!2026");
+  };
+  return <main className="merchant-login-shell">
+    <section className="merchant-login-story">
+      <div className="login-brand"><span><ShieldCheck/></span><div><strong>PayArc</strong><small>Revenue Control Plane</small></div></div>
+      <div className="login-story-copy"><span className="login-kicker">Merchant-grade revenue recovery</span><h1>Recover more revenue.<br/>Keep every action accountable.</h1><p>One secure workspace for payment intelligence, checkout rescue, recurring revenue, B2B collections, and promise-to-pay workflows.</p></div>
+      <div className="login-trust"><div><ShieldCheck/><span><strong>Zero-trust execution</strong><small>AI recommends. Deterministic policy authorizes.</small></span></div><div><Radio/><span><strong>Signed provider truth</strong><small>Recovery closes only after verified Razorpay outcomes.</small></span></div><div><FileClock/><span><strong>Tamper-evident audit</strong><small>Every login, decision, and intervention is traceable.</small></span></div></div>
+    </section>
+    <section className="merchant-login-panel"><form onSubmit={submit}>
+      <div className="login-lock"><LockKeyhole/></div><span className="overline">Protected merchant workspace</span><h2>Sign in to PayArc</h2><p>Use your merchant account to review exceptions and manage recovery workflows.</p>
+      <label><span>Email address</span><input type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="username" placeholder="merchant@company.com" required/></label>
+      <label><span>Password</span><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" placeholder="Enter your password" required/></label>
+      {error && <div className="login-error"><AlertTriangle/>{error}</div>}
+      <button className="login-submit" disabled={busy || !email.trim() || !password}>{busy ? <><RefreshCw className="spin"/>Signing in…</> : <><LockKeyhole/>Sign in securely</>}</button>
+      {demoMode && <div className="demo-login"><span>Development demo accounts</span><div><button type="button" onClick={() => useDemo("owner")}><strong>Merchant Owner</strong><small>Full control and demos</small></button><button type="button" onClick={() => useDemo("operator")}><strong>Recovery Operator</strong><small>Review and workflows</small></button></div></div>}
+      <footer><ShieldCheck/>Session secured with an HTTP-only, SameSite cookie.</footer>
+    </form></section>
+  </main>;
+}
+
 export function App() {
   const [view, setView] = useState<ViewId>(() => readRoute().view);
   const [data, setData] = useState<Snapshot | null>(null);
@@ -492,7 +526,9 @@ export function App() {
   const [scenarioResult, setScenarioResult] = useState<ScenarioResult | null>(null);
   const [scenarioTrace, setScenarioTrace] = useState<ScenarioResult | null>(null);
   const [toast, setToast] = useState<{ message: string; tone: "success" | "danger" } | null>(null);
-  const [operatorToken, setOperatorToken] = useState("");
+  const [authSession, setAuthSession] = useState<AuthSessionState | null>(null);
+  const [authBusy, setAuthBusy] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
   const [realtimeState, setRealtimeState] = useState<RealtimeState>("connecting");
   const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
   const [readNotificationKeys, setReadNotificationKeys] = useState<Set<string>>(readStoredNotificationKeys);
@@ -534,14 +570,66 @@ export function App() {
       setData({ config, metrics, cases, audit, events, scenarios, scenarioRuns, razorpayTestLab, revenue });
       setError(null);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Unable to load dashboard");
+      const message = caught instanceof Error ? caught.message : "Unable to load dashboard";
+      if (message === "Merchant authentication required") {
+        setAuthSession((current) => ({ enabled: true, authenticated: false, demoMode: current?.demoMode ?? true, user: null, expiresAt: null }));
+        setData(null);
+        setError(null);
+      } else {
+        setError(message);
+      }
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
   }, []);
 
-  useEffect(() => { void reload(); }, [reload]);
+  useEffect(() => {
+    let active = true;
+    void api.authSession()
+      .then((session) => {
+        if (!active) return;
+        setAuthSession(session);
+        if (session.authenticated) void reload();
+        else setLoading(false);
+      })
+      .catch((caught) => {
+        if (!active) return;
+        setError(caught instanceof Error ? caught.message : "Unable to verify merchant session");
+        setLoading(false);
+      });
+    return () => { active = false; };
+  }, [reload]);
+
+  const login = useCallback(async (email: string, password: string) => {
+    setAuthBusy(true);
+    setAuthError(null);
+    try {
+      const session = await api.login(email, password);
+      setAuthSession(session);
+      setError(null);
+      await reload();
+    } catch (caught) {
+      setAuthError(caught instanceof Error ? caught.message : "Unable to sign in");
+    } finally {
+      setAuthBusy(false);
+    }
+  }, [reload]);
+
+  const logout = useCallback(async () => {
+    try {
+      const session = await api.logout();
+      window.sessionStorage.removeItem("payArcOperatorToken");
+      setAuthSession(session);
+      setData(null);
+      setSelectedCase(null);
+      setAccountOpen(false);
+      setView("overview");
+      writeRoute("overview", null, true);
+    } catch (caught) {
+      notify(caught instanceof Error ? caught.message : "Unable to sign out", "danger");
+    }
+  }, [notify]);
 
   const markNotificationRead = useCallback((item: RecoveryCase) => {
     if (!isNotifiableCase(item)) return;
@@ -727,14 +815,10 @@ export function App() {
     { label: "Revenue Autopilot", items: [["overview", "Overview", <LayoutDashboard/>], ["portfolio", "Portfolio optimizer", <TrendingUp/>], ["incidents", "Payment intelligence", <Network/>], ["journeys", "Checkout journeys", <Route/>], ["subscriptions", "Recurring revenue", <RefreshCw/>], ["receivables", "B2B receivables", <Building2/>], ["conversations", "Promises & voice", <MessageSquareText/>]] },
     { label: "Operations", items: [["cases", "Recovery cases", <WalletCards/>], ["scenarios", "Scenario Lab", <FlaskConical/>], ["events", "Events & audit", <Radio/>], ["analytics", "Analytics", <BarChart3/>]] },
     { label: "Controls", items: [["security", "Security Center", <ShieldCheck/>], ["integrations", "Integrations", <Cable/>], ["guide", "Operator Guide", <BookOpen/>]] }
-  ] as Array<{ label: string; items: Array<[ViewId, string, ReactNode]> }>;
-
-  const authenticate = () => {
-    if (!operatorToken.trim()) return;
-    window.sessionStorage.setItem("payArcOperatorToken", operatorToken.trim());
-    setOperatorToken("");
-    void reload();
-  };
+  ].map((group) => ({
+    ...group,
+    items: group.items.filter(([id]) => authSession?.user?.role === "MERCHANT_OWNER" || id !== "scenarios")
+  })) as Array<{ label: string; items: Array<[ViewId, string, ReactNode]> }>;
 
   let content: ReactNode = null;
   if (data) {
@@ -753,6 +837,16 @@ export function App() {
     if (view === "integrations") content = <IntegrationsView config={data.config}/>;
     if (view === "guide") content = <GuideView onView={switchView}/>;
   }
+
+  if (!authSession) {
+    return <div className="auth-bootstrap">{error ? <div className="error-screen panel"><AlertTriangle/><h2>Unable to reach PayArc</h2><p>{error}</p><button onClick={() => window.location.reload()}><RefreshCw/>Retry connection</button></div> : <div className="loading-screen"><div className="loader"/><strong>Securing merchant workspace</strong><span>Verifying your PayArc session…</span></div>}</div>;
+  }
+  if (!authSession.authenticated || !authSession.user) {
+    return <MerchantLogin busy={authBusy} error={authError} demoMode={authSession.demoMode} onLogin={login}/>;
+  }
+  const merchantName = authSession.user.displayName;
+  const merchantRole = authSession.user.role === "MERCHANT_OWNER" ? "Merchant owner" : "Recovery operator";
+  const merchantInitial = merchantName.trim().charAt(0).toUpperCase() || "M";
 
   return <div className="app-shell">
     <aside className={`sidebar ${mobileNav ? "open" : ""}`}><div className="brand"><div className="brand-mark"><ShieldCheck/></div><div><strong>PayArc</strong><span>Revenue Control Plane</span></div><button className="mobile-close" onClick={() => setMobileNav(false)}><PanelLeftClose/></button></div><nav>{navGroups.map((group) => <div className="nav-group" key={group.label}><span>{group.label}</span>{group.items.map(([id, label, icon]) => <button className={view === id ? "active" : ""} onClick={() => switchView(id)} key={id}>{icon}<span>{label}</span>{id === "cases" && notificationCases.length > 0 && <b>{notificationCases.length}</b>}</button>)}</div>)}</nav></aside>
@@ -779,11 +873,11 @@ export function App() {
             <button className="icon-button" title="Open operator guide" onClick={() => switchView("guide")}><BookOpen size={18}/></button>
             <button className="icon-button" title="Refresh dashboard" onClick={() => void reload(true)} disabled={refreshing}><RefreshCw size={18} className={refreshing ? "spin" : ""}/></button>
             <div className="popover-wrap"><button className="icon-button" aria-label={`${unreadNotificationCases.length} unread notifications`} onClick={() => { setNotificationsOpen(!notificationsOpen); setAccountOpen(false); }}><Bell size={18}/>{unreadNotificationCases.length > 0 && <b className="notification-dot">{unreadNotificationCases.length}</b>}</button>{notificationsOpen && <div className="popover notifications"><div className="popover-head"><div><strong>Action centre</strong><span>{unreadNotificationCases.length} unread · {notificationCases.length} requiring action</span></div>{unreadNotificationCases.length > 0 && <button className="mark-read-button" onClick={markAllNotificationsRead}><Check size={14}/>Mark all read</button>}</div>{notifications.ordered.slice(0, 6).map((item) => <button className={unreadNotificationIds.has(item.id) ? "unread" : ""} key={item.id} onClick={() => { void openCase(item.id); setNotificationsOpen(false); }}><AlertTriangle size={16}/><div><strong>{humanize(item.status)}</strong><span>{formatMoney(item.amount)} · {humanize(item.failureClass)}</span></div></button>)}{!notifications.open.length && <EmptyState icon={<CheckCircle2/>} title="You're all caught up" detail="No recovery alerts."/>}</div>}</div>
-            <div className="popover-wrap account-wrap"><button className="account-button" onClick={() => { setAccountOpen(!accountOpen); setNotificationsOpen(false); }}><div>M</div><span><strong>Merchant</strong><small>Merchant owner</small></span><ChevronDown size={14}/></button>{accountOpen && <div className="popover account-menu"><div><strong>Merchant</strong><span>merchant@payarc.test</span></div><button onClick={() => switchView("integrations")}><Server size={16}/>Runtime settings</button><button onClick={() => switchView("security")}><ShieldCheck size={16}/>Security controls</button></div>}</div>
+            <div className="popover-wrap account-wrap"><button className="account-button" onClick={() => { setAccountOpen(!accountOpen); setNotificationsOpen(false); }}><div>{merchantInitial}</div><span><strong>{merchantName}</strong><small>{merchantRole}</small></span><ChevronDown size={14}/></button>{accountOpen && <div className="popover account-menu"><div><strong>{merchantName}</strong><span>{authSession.user.email}</span><small>{merchantRole}</small></div><button onClick={() => switchView("integrations")}><Server size={16}/>Runtime settings</button><button onClick={() => switchView("security")}><ShieldCheck size={16}/>Security controls</button><button className="logout-button" onClick={() => void logout()}><LogOut size={16}/>Sign out</button></div>}</div>
           </div>
         </div>
       </header>
-      <main className="content">{loading ? <div className="loading-screen"><div className="loader"/><strong>Loading recovery control plane</strong><span>Verifying APIs and audit state…</span></div> : error ? error === "Operator authentication required" ? <div className="auth-screen panel"><div className="auth-mark"><LockKeyhole/></div><span className="overline">Protected operator API</span><h2>Authenticate to PayArc</h2><p>Enter the operator token configured for this environment. It remains in this browser tab only.</p><label><span>Operator token</span><input type="password" value={operatorToken} onChange={(event) => setOperatorToken(event.target.value)} onKeyDown={(event) => event.key === "Enter" && authenticate()} autoComplete="current-password" placeholder="Bearer token"/></label><button disabled={!operatorToken.trim()} onClick={authenticate}><LockKeyhole/>Connect securely</button></div> : <div className="error-screen panel"><AlertTriangle/><h2>Dashboard connection failed</h2><p>{error}</p><button onClick={() => void reload()}><RefreshCw/>Retry connection</button></div> : content}</main>
+      <main className="content">{loading ? <div className="loading-screen"><div className="loader"/><strong>Loading recovery control plane</strong><span>Verifying APIs and audit state…</span></div> : error ? <div className="error-screen panel"><AlertTriangle/><h2>Dashboard connection failed</h2><p>{error}</p><button onClick={() => void reload()}><RefreshCw/>Retry connection</button></div> : content}</main>
     </div>
     {selectedCase && data && <CaseDrawer detail={selectedCase} providerMode={data.config.paymentProviderMode} whatsappMode={data.config.whatsappMode} publicBaseUrl={data.config.publicBaseUrl} busy={drawerBusy} onClose={closeCase} onAction={caseAction}/>}
     {scenarioTrace && <ScenarioTraceDrawer run={scenarioTrace} onClose={() => setScenarioTrace(null)}/>}

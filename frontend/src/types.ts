@@ -25,6 +25,23 @@ export type PublicConfig = {
   actionRetryMaxAttempts: number;
   actionRetryBaseSeconds: number;
   actionRetryMaxSeconds: number;
+  authEnabled: boolean;
+};
+
+export type AuthRole = "MERCHANT_OWNER" | "RECOVERY_OPERATOR";
+
+export type AuthUser = {
+  email: string;
+  displayName: string;
+  role: AuthRole;
+};
+
+export type AuthSessionState = {
+  enabled: boolean;
+  authenticated: boolean;
+  demoMode: boolean;
+  user: AuthUser | null;
+  expiresAt: number | null;
 };
 
 export type CohortMetric = {

@@ -84,6 +84,18 @@ export type RazorpayTestRun = {
   updatedAt: number;
 };
 
+export type AuthRole = "MERCHANT_OWNER" | "RECOVERY_OPERATOR";
+
+export type AuthSession = {
+  tokenHash: string;
+  email: string;
+  displayName: string;
+  role: AuthRole;
+  createdAt: number;
+  expiresAt: number;
+  revokedAt: number | null;
+};
+
 function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
@@ -396,6 +408,19 @@ export class RecoveryRepository {
         value_json TEXT NOT NULL,
         updated_at INTEGER NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS auth_sessions (
+        token_hash TEXT PRIMARY KEY,
+        email TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        role TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        revoked_at INTEGER
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_auth_sessions_expiry
+        ON auth_sessions(expires_at, revoked_at);
     `);
 
     // Additive migrations keep existing local ledgers usable after an upgrade.
@@ -422,6 +447,43 @@ export class RecoveryRepository {
       this.db.exec("ROLLBACK");
       throw error;
     }
+  }
+
+  createAuthSession(input: Omit<AuthSession, "revokedAt">): AuthSession {
+    this.db.prepare(`
+      INSERT INTO auth_sessions (token_hash, email, display_name, role, created_at, expires_at, revoked_at)
+      VALUES (?, ?, ?, ?, ?, ?, NULL)
+    `).run(input.tokenHash, input.email, input.displayName, input.role, input.createdAt, input.expiresAt);
+    return { ...input, revokedAt: null };
+  }
+
+  getAuthSession(tokenHash: string, now: number): AuthSession | null {
+    const row = this.db.prepare(`
+      SELECT * FROM auth_sessions
+      WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?
+    `).get(tokenHash, now) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return {
+      tokenHash: String(row.token_hash),
+      email: String(row.email),
+      displayName: String(row.display_name),
+      role: String(row.role) as AuthRole,
+      createdAt: Number(row.created_at),
+      expiresAt: Number(row.expires_at),
+      revokedAt: row.revoked_at === null ? null : Number(row.revoked_at)
+    };
+  }
+
+  revokeAuthSession(tokenHash: string, now: number): boolean {
+    const result = this.db.prepare(`
+      UPDATE auth_sessions SET revoked_at = ?
+      WHERE token_hash = ? AND revoked_at IS NULL
+    `).run(now, tokenHash);
+    return result.changes === 1;
+  }
+
+  deleteExpiredAuthSessions(now: number): number {
+    return Number(this.db.prepare("DELETE FROM auth_sessions WHERE expires_at <= ? OR revoked_at IS NOT NULL").run(now).changes);
   }
 
   enqueueEvent(input: {

@@ -22,6 +22,7 @@ import {
 } from "./providers/whatsapp-provider.js";
 import { signWebhook } from "./security/webhook.js";
 import { DemoScenarioRunner, demoScenarios } from "./services/demo-scenarios.js";
+import { AuthService } from "./services/auth-service.js";
 import { RecoveryEngine } from "./services/recovery-engine.js";
 import { RecoveryChannelOrchestrator } from "./services/recovery-channel-orchestrator.js";
 import { RevenueIntelligenceService } from "./services/revenue-intelligence.js";
@@ -38,6 +39,7 @@ export type AppContext = {
   ingestor: WebhookIngestor;
   whatsappProvider: WhatsAppProvider;
   channelOrchestrator: RecoveryChannelOrchestrator;
+  authService: AuthService;
 };
 
 export type BuildOptions = {
@@ -52,6 +54,36 @@ export type BuildOptions = {
 
 function parseJsonBody<T>(value: unknown, schema: z.ZodType<T>): T {
   return schema.parse(value ?? {});
+}
+
+const sessionCookieName = "payarc_session";
+
+function readCookie(header: string | undefined, name: string): string | null {
+  if (!header) return null;
+  for (const part of header.split(";")) {
+    const [key, ...rest] = part.trim().split("=");
+    if (key === name) {
+      try {
+        return decodeURIComponent(rest.join("="));
+      } catch {
+        return null;
+      }
+    }
+  }
+  return null;
+}
+
+function sessionCookie(token: string, maxAge: number, secure: boolean): string {
+  return `${sessionCookieName}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure ? "; Secure" : ""}`;
+}
+
+function isOwnerOnlyRequest(method: string, url: string): boolean {
+  if (method === "GET" || method === "HEAD") return false;
+  const path = url.split("?")[0]!;
+  return path === "/api/worker/run"
+    || path === "/api/revenue/batch/run"
+    || path.startsWith("/api/demo/")
+    || path.startsWith("/api/razorpay-test/");
 }
 
 function escapeHtml(value: string): string {
@@ -123,6 +155,7 @@ export async function buildApplication(options: BuildOptions = {}): Promise<AppC
   const config = options.config ?? loadConfig();
   const clock = options.clock ?? systemClock;
   const repository = options.repository ?? new RecoveryRepository(config.databasePath);
+  const authService = new AuthService(config.auth, repository, clock);
   const provider = options.provider ?? (config.paymentProviderMode === "razorpay"
     ? new RazorpayProvider({
         keyId: config.razorpay.keyId,
@@ -197,12 +230,64 @@ export async function buildApplication(options: BuildOptions = {}): Promise<AppC
   });
 
   app.addHook("onRequest", async (request, reply) => {
-    if (!request.url.startsWith("/api/") || !config.operatorApiToken) return;
-    const expected = Buffer.from(`Bearer ${config.operatorApiToken}`);
-    const received = Buffer.from(request.headers.authorization ?? "");
-    if (received.length !== expected.length || !timingSafeEqual(received, expected)) {
-      return reply.code(401).send({ error: "Operator authentication required" });
+    if (!request.url.startsWith("/api/")) return;
+    const path = request.url.split("?")[0]!;
+    if (["/api/auth/session", "/api/auth/login", "/api/auth/logout"].includes(path)) return;
+
+    const session = config.auth.enabled
+      ? authService.authenticate(readCookie(request.headers.cookie, sessionCookieName))
+      : null;
+    if (session) {
+      if (isOwnerOnlyRequest(request.method, request.url) && session.user.role !== "MERCHANT_OWNER") {
+        authService.recordAccessDenied(path, session.user.role, "MERCHANT_OWNER_REQUIRED");
+        return reply.code(403).send({ error: "Merchant Owner permission required" });
+      }
+      return;
     }
+
+    const expected = config.operatorApiToken ? Buffer.from(`Bearer ${config.operatorApiToken}`) : null;
+    const received = Buffer.from(request.headers.authorization ?? "");
+    const bearerAccepted = expected !== null && received.length === expected.length && timingSafeEqual(received, expected);
+    if (bearerAccepted) return;
+
+    if (config.auth.enabled || config.operatorApiToken) {
+      authService.recordAccessDenied(path, null, "AUTHENTICATION_REQUIRED");
+      return reply.code(401).send({ error: "Merchant authentication required" });
+    }
+  });
+
+  app.get("/api/auth/session", async (request, reply) => {
+    reply.header("cache-control", "no-store");
+    if (!config.auth.enabled) {
+      return { enabled: false, authenticated: true, demoMode: config.nodeEnv !== "production", user: { email: "merchant@payarc.local", displayName: "Merchant", role: "MERCHANT_OWNER" }, expiresAt: null };
+    }
+    const session = authService.authenticate(readCookie(request.headers.cookie, sessionCookieName));
+    return {
+      enabled: true,
+      authenticated: Boolean(session),
+      demoMode: config.nodeEnv !== "production",
+      user: session?.user ?? null,
+      expiresAt: session?.expiresAt ?? null
+    };
+  });
+
+  app.post("/api/auth/login", async (request, reply) => {
+    reply.header("cache-control", "no-store");
+    if (!config.auth.enabled) return reply.code(409).send({ error: "Merchant authentication is disabled" });
+    const body = parseJsonBody(request.body, z.object({ email: z.string().email().max(254), password: z.string().min(1).max(256) }));
+    const session = authService.login(body.email, body.password, request.ip);
+    if (!session) return reply.code(401).send({ error: "Invalid email or password" });
+    const secure = config.nodeEnv === "production" || request.protocol === "https" || request.headers["x-forwarded-proto"] === "https";
+    reply.header("set-cookie", sessionCookie(session.token, config.auth.sessionTtlSeconds, secure));
+    return reply.send({ enabled: true, authenticated: true, demoMode: config.nodeEnv !== "production", user: session.user, expiresAt: session.expiresAt });
+  });
+
+  app.post("/api/auth/logout", async (request, reply) => {
+    reply.header("cache-control", "no-store");
+    authService.logout(readCookie(request.headers.cookie, sessionCookieName));
+    const secure = config.nodeEnv === "production" || request.protocol === "https" || request.headers["x-forwarded-proto"] === "https";
+    reply.header("set-cookie", sessionCookie("", 0, secure));
+    return reply.send({ enabled: config.auth.enabled, authenticated: !config.auth.enabled, demoMode: config.nodeEnv !== "production", user: null, expiresAt: null });
   });
 
   app.setErrorHandler((error, _request, reply) => {
@@ -738,5 +823,5 @@ export async function buildApplication(options: BuildOptions = {}): Promise<AppC
     scenarioRepository?.close();
   });
 
-  return { app, config, repository, provider, engine, revenueIntelligence, ingestor, whatsappProvider, channelOrchestrator };
+  return { app, config, repository, provider, engine, revenueIntelligence, ingestor, whatsappProvider, channelOrchestrator, authService };
 }

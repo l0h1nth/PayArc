@@ -220,9 +220,23 @@ npm run build:ui
 npm run dev
 ```
 
-Open <http://127.0.0.1:3000>. Default mock mode requires no external credentials.
+Open <http://127.0.0.1:3000>. Default mock mode requires no external provider credentials. Development login accounts are:
+
+- Merchant Owner: `merchant@payarc.test` / `PayArcMerchant!2026`
+- Recovery Operator: `operator@payarc.test` / `PayArcOperator!2026`
+
+These credentials are rejected in production. Set unique passwords and a random `AUTH_SESSION_SECRET` of at least 32 characters before deployment.
 
 For frontend hot reload, keep the API running and start `npm run dev:ui` in a second terminal, then open <http://127.0.0.1:5173>.
+
+## Merchant authentication
+
+PayArc uses revocable server-side sessions. The browser receives only a random HTTP-only, `SameSite=Strict` cookie; SQLite stores its SHA-256 hash. Login, logout, invalid credentials, and denied role access are written to the tamper-evident audit ledger.
+
+- **Merchant Owner:** full workspace access, Scenario Lab, provider-backed demos, and batch controls.
+- **Recovery Operator:** case review and day-to-day recovery workflows without owner-only demo execution.
+
+The dashboard and `/api/*` routes require a session. Signed Razorpay/WhatsApp webhooks and tokenized public Smart Recovery Sessions remain outside the merchant login boundary.
 
 ## Razorpay Test Mode
 
@@ -282,7 +296,7 @@ The callback is `https://your-host/webhooks/whatsapp`. Provider and messaging cr
 - **Dashboard:** React, Vite, Recharts, responsive Razorpay-inspired UI
 - **Integrations:** Razorpay Test Mode, Groq/OpenAI decision adapters, WhatsApp Cloud API
 - **Realtime:** authenticated server-sent events
-- **Verification:** 60 automated tests covering recovery, provider contracts, automation, security, and concurrency
+- **Verification:** 62 automated tests covering recovery, provider contracts, automation, authentication, security, and concurrency
 
 ```text
 src/

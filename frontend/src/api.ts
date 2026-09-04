@@ -1,4 +1,4 @@
-import type { Action, AuditEntry, CaseDetail, ChannelReadiness, DemoScenario, EventSummary, Metrics, PublicConfig, RazorpayTestLab, RazorpayTestRun, RecoveryCase, ScenarioResult, ScenarioRunSummary } from "./types";
+import type { Action, AuditEntry, AuthSessionState, CaseDetail, ChannelReadiness, DemoScenario, EventSummary, Metrics, PublicConfig, RazorpayTestLab, RazorpayTestRun, RecoveryCase, ScenarioResult, ScenarioRunSummary } from "./types";
 import type { RevenueObject, RevenueSnapshot } from "./revenue-types";
 
 export type RealtimeState = "connecting" | "live" | "reconnecting" | "offline";
@@ -18,6 +18,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const operatorToken = window.sessionStorage.getItem("payArcOperatorToken");
   const response = await fetch(path, {
     ...options,
+    credentials: "same-origin",
     headers: {
       "content-type": "application/json",
       ...(operatorToken ? { authorization: `Bearer ${operatorToken}` } : {}),
@@ -38,6 +39,9 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 }
 
 export const api = {
+  authSession: () => request<AuthSessionState>("/api/auth/session"),
+  login: (email: string, password: string) => request<AuthSessionState>("/api/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }),
+  logout: () => request<AuthSessionState>("/api/auth/logout", { method: "POST", body: "{}" }),
   config: () => request<PublicConfig>("/api/config"),
   metrics: () => request<Metrics>("/api/metrics"),
   revenue: () => request<RevenueSnapshot>("/api/revenue/snapshot"),

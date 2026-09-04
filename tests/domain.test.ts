@@ -57,14 +57,17 @@ test("high-value cases are allowed only with approval", () => {
   assert.ok(policy.reasons.some((reason) => reason.includes("threshold")));
 });
 
-test("production configuration requires strong webhook and operator secrets", () => {
+test("production configuration requires strong webhook and merchant authentication secrets", () => {
   assert.throws(() => loadConfig({ NODE_ENV: "production" }));
   const config = loadConfig({
     NODE_ENV: "production",
     RAZORPAY_WEBHOOK_SECRET: "a-secure-webhook-secret",
-    OPERATOR_API_TOKEN: "x".repeat(32)
+    AUTH_SESSION_SECRET: "x".repeat(40),
+    MERCHANT_OWNER_PASSWORD: "owner-production-secret-2026",
+    RECOVERY_OPERATOR_PASSWORD: "operator-production-secret-2026"
   });
   assert.equal(config.nodeEnv, "production");
+  assert.equal(config.auth.enabled, true);
 });
 
 test("AI provider auto-selects Groq and explicit providers fail fast without credentials", () => {

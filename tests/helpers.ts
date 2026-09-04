@@ -14,6 +14,7 @@ export function testConfig(overrides: Record<string, string> = {}): AppConfig {
     HOST: "127.0.0.1",
     PORT: "3000",
     DATABASE_PATH: ":memory:",
+    AUTH_ENABLED: "false",
     PAYMENT_PROVIDER_MODE: "mock",
     RAZORPAY_WEBHOOK_SECRET: "test_webhook_secret",
     AUTO_ACTIONS_ENABLED: "false",

@@ -6,6 +6,11 @@ const bool = z
   .default("false")
   .transform((value) => value === "true");
 
+const enabledByDefault = z
+  .enum(["true", "false"])
+  .default("true")
+  .transform((value) => value === "true");
+
 const positiveInt = (fallback: number) =>
   z.coerce.number().int().positive().default(fallback);
 
@@ -19,6 +24,13 @@ const envSchema = z.object({
   PUBLIC_BASE_URL: z.string().url().default("http://127.0.0.1:3000"),
   DATABASE_PATH: z.string().default("./data/payarc.db"),
   OPERATOR_API_TOKEN: z.string().default(""),
+  AUTH_ENABLED: enabledByDefault,
+  AUTH_SESSION_SECRET: z.string().default("payarc-development-session-secret-change-me"),
+  AUTH_SESSION_TTL_SECONDS: positiveInt(28_800),
+  MERCHANT_OWNER_EMAIL: z.string().email().default("merchant@payarc.test"),
+  MERCHANT_OWNER_PASSWORD: z.string().min(8).default("PayArcMerchant!2026"),
+  RECOVERY_OPERATOR_EMAIL: z.string().email().default("operator@payarc.test"),
+  RECOVERY_OPERATOR_PASSWORD: z.string().min(8).default("PayArcOperator!2026"),
   PAYMENT_PROVIDER_MODE: z.enum(["mock", "razorpay"]).default("mock"),
   RAZORPAY_KEY_ID: z.string().default(""),
   RAZORPAY_KEY_SECRET: z.string().default(""),
@@ -68,6 +80,12 @@ export type AppConfig = {
   publicBaseUrl: string;
   databasePath: string;
   operatorApiToken: string;
+  auth: {
+    enabled: boolean;
+    sessionSecret: string;
+    sessionTtlSeconds: number;
+    users: Array<{ email: string; password: string; displayName: string; role: "MERCHANT_OWNER" | "RECOVERY_OPERATOR" }>;
+  };
   paymentProviderMode: "mock" | "razorpay";
   razorpay: {
     keyId: string;
@@ -148,8 +166,17 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
     if (env.RAZORPAY_WEBHOOK_SECRET === "dev_webhook_secret" || env.RAZORPAY_WEBHOOK_SECRET.length < 16) {
       throw new Error("Production requires a non-default webhook secret of at least 16 characters");
     }
-    if (env.OPERATOR_API_TOKEN.length < 32) {
-      throw new Error("Production requires OPERATOR_API_TOKEN with at least 32 characters");
+    if (!env.AUTH_ENABLED) {
+      throw new Error("Production requires merchant authentication");
+    }
+    if (env.AUTH_SESSION_SECRET === "payarc-development-session-secret-change-me" || env.AUTH_SESSION_SECRET.length < 32) {
+      throw new Error("Production requires a non-default AUTH_SESSION_SECRET of at least 32 characters");
+    }
+    if ([env.MERCHANT_OWNER_PASSWORD, env.RECOVERY_OPERATOR_PASSWORD].some((password) => password.length < 12 || password.includes("PayArc"))) {
+      throw new Error("Production requires non-default merchant passwords of at least 12 characters");
+    }
+    if (env.OPERATOR_API_TOKEN && env.OPERATOR_API_TOKEN.length < 32) {
+      throw new Error("Configured OPERATOR_API_TOKEN must contain at least 32 characters");
     }
   }
   if (env.WHATSAPP_MODE === "cloud_api" && (!env.WHATSAPP_PHONE_NUMBER_ID || !env.WHATSAPP_ACCESS_TOKEN)) {
@@ -169,6 +196,15 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
     publicBaseUrl: env.PUBLIC_BASE_URL.replace(/\/$/, ""),
     databasePath: env.DATABASE_PATH === ":memory:" ? ":memory:" : resolve(env.DATABASE_PATH),
     operatorApiToken: env.OPERATOR_API_TOKEN,
+    auth: {
+      enabled: env.AUTH_ENABLED,
+      sessionSecret: env.AUTH_SESSION_SECRET,
+      sessionTtlSeconds: env.AUTH_SESSION_TTL_SECONDS,
+      users: [
+        { email: env.MERCHANT_OWNER_EMAIL.toLowerCase(), password: env.MERCHANT_OWNER_PASSWORD, displayName: "Merchant", role: "MERCHANT_OWNER" },
+        { email: env.RECOVERY_OPERATOR_EMAIL.toLowerCase(), password: env.RECOVERY_OPERATOR_PASSWORD, displayName: "Recovery Operator", role: "RECOVERY_OPERATOR" }
+      ]
+    },
     paymentProviderMode: env.PAYMENT_PROVIDER_MODE,
     razorpay: {
       keyId: env.RAZORPAY_KEY_ID,
@@ -252,6 +288,7 @@ export function publicConfig(config: AppConfig) {
     workerIntervalMs: config.worker.intervalMs,
     actionRetryMaxAttempts: config.worker.actionRetryMaxAttempts,
     actionRetryBaseSeconds: config.worker.actionRetryBaseSeconds,
-    actionRetryMaxSeconds: config.worker.actionRetryMaxSeconds
+    actionRetryMaxSeconds: config.worker.actionRetryMaxSeconds,
+    authEnabled: config.auth.enabled
   };
 }

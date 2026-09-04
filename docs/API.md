@@ -2,7 +2,9 @@
 
 All amounts use the smallest currency unit (paise for INR). Public responses never include API/webhook secrets or raw unredacted webhook bodies.
 
-When `OPERATOR_API_TOKEN` is configured, every `/api/*` request requires `Authorization: Bearer <token>`. A token of at least 32 characters is mandatory in production. `/health`, `/recover/:id`, and provider webhooks use their own public/provider-authenticated boundaries.
+Merchant dashboard requests use a revocable server-side session established by `POST /api/auth/login`. The browser receives an HTTP-only, `SameSite=Strict` cookie; only its hash is stored. Merchant Owners have full access, while Recovery Operators cannot run owner-only Scenario Lab, Razorpay Test Run, worker, or portfolio-batch mutations. `OPERATOR_API_TOKEN` remains an optional bearer credential for non-browser automation.
+
+`/api/auth/session`, `/api/auth/login`, and `/api/auth/logout` are public authentication endpoints. `/health`, `/recover/:id`, and provider webhooks remain outside merchant login because they use health, unguessable-session, or signed-provider boundaries.
 
 `GET /recover/:id` is the public, opaque Smart Recovery Session. Its stored states are `WAITING`, `READY`, `PAID`, `CLOSED`, and `EXPIRED`; a paused case is rendered as a waiting experience. It navigates only to allowlisted Razorpay hosts (plus the mock test host outside Razorpay mode). The address is stable even when the provider destination changes. Responses use `Cache-Control: no-store` and a restrictive Content Security Policy.
 

@@ -461,3 +461,66 @@ test("operator API can be bearer-protected without blocking provider webhooks", 
   assert.equal((await sendEvent(context, event)).statusCode, 202);
   await context.close();
 });
+
+test("merchant login creates a revocable HTTP-only session without blocking signed webhooks", async () => {
+  const context = await setup({
+    AUTH_ENABLED: "true",
+    AUTH_SESSION_SECRET: "test-session-secret-that-is-long-enough",
+    MERCHANT_OWNER_EMAIL: "owner@example.test",
+    MERCHANT_OWNER_PASSWORD: "owner-password-2026"
+  });
+
+  const anonymousSession = await context.app.inject({ method: "GET", url: "/api/auth/session" });
+  assert.equal(anonymousSession.statusCode, 200);
+  assert.equal(anonymousSession.json().authenticated, false);
+  assert.equal((await context.app.inject({ method: "GET", url: "/api/cases" })).statusCode, 401);
+
+  const rejected = await context.app.inject({ method: "POST", url: "/api/auth/login", payload: { email: "owner@example.test", password: "wrong-password" } });
+  assert.equal(rejected.statusCode, 401);
+
+  const login = await context.app.inject({ method: "POST", url: "/api/auth/login", payload: { email: "owner@example.test", password: "owner-password-2026" } });
+  assert.equal(login.statusCode, 200);
+  assert.equal(login.json().user.role, "MERCHANT_OWNER");
+  const cookie = String(login.headers["set-cookie"]);
+  assert.match(cookie, /^payarc_session=/);
+  assert.match(cookie, /HttpOnly/);
+  assert.match(cookie, /SameSite=Strict/);
+  assert.equal((await context.app.inject({ method: "GET", url: "/api/cases", headers: { cookie } })).statusCode, 200);
+
+  const event = failedPaymentEvent({ createdAt: context.clock.now() });
+  seedFailedPayment(context.provider, event);
+  assert.equal((await sendEvent(context, event)).statusCode, 202);
+
+  const logout = await context.app.inject({ method: "POST", url: "/api/auth/logout", headers: { cookie }, payload: {} });
+  assert.equal(logout.statusCode, 200);
+  assert.match(String(logout.headers["set-cookie"]), /Max-Age=0/);
+  assert.equal((await context.app.inject({ method: "GET", url: "/api/cases", headers: { cookie } })).statusCode, 401);
+  const auditKinds = context.repository.listAudit().map((entry) => entry.kind);
+  assert.ok(auditKinds.includes("AUTH_LOGIN_FAILED"));
+  assert.ok(auditKinds.includes("AUTH_LOGIN_SUCCEEDED"));
+  assert.ok(auditKinds.includes("AUTH_LOGOUT"));
+  assert.ok(auditKinds.includes("AUTH_ACCESS_DENIED"));
+  await context.close();
+});
+
+test("recovery operators can inspect workflows but owner-only demo execution is denied and audited", async () => {
+  const context = await setup({
+    AUTH_ENABLED: "true",
+    AUTH_SESSION_SECRET: "test-session-secret-that-is-long-enough",
+    RECOVERY_OPERATOR_EMAIL: "operator@example.test",
+    RECOVERY_OPERATOR_PASSWORD: "operator-password-2026"
+  });
+  const login = await context.app.inject({ method: "POST", url: "/api/auth/login", payload: { email: "operator@example.test", password: "operator-password-2026" } });
+  assert.equal(login.statusCode, 200);
+  assert.equal(login.json().user.role, "RECOVERY_OPERATOR");
+  const cookie = String(login.headers["set-cookie"]);
+  assert.equal((await context.app.inject({ method: "GET", url: "/api/cases", headers: { cookie } })).statusCode, 200);
+  const denied = await context.app.inject({ method: "POST", url: "/api/demo/scenarios/incorrect-otp/run", headers: { cookie }, payload: {} });
+  assert.equal(denied.statusCode, 403);
+  assert.equal(denied.json().error, "Merchant Owner permission required");
+  assert.ok(context.repository.listAudit().some((entry) => {
+    if (entry.kind !== "AUTH_ACCESS_DENIED" || typeof entry.data !== "object" || entry.data === null) return false;
+    return "reason" in entry.data && entry.data.reason === "MERCHANT_OWNER_REQUIRED";
+  }));
+  await context.close();
+});
