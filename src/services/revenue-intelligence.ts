@@ -531,7 +531,76 @@ export class RevenueIntelligenceService {
     if (item.data.blocker) {
       return this.save({ ...item, status: "HUMAN_REVIEW", data: { ...item.data, nextAction: "RESOLVE_DOCUMENT_BLOCKER" } }, "CONTACT_RECEIVABLE", { contacted: false, blocker: item.data.blocker });
     }
-    return this.save({ ...item, status: "CONTACTED", data: { ...item.data, nextAction: "CAPTURE_PROMISE_OR_DISPUTE" } }, "CONTACT_RECEIVABLE", { contacted: true, channel: item.data.contactChannel });
+    if (["CONTACTED", "PROMISE_CAPTURED", "HUMAN_REVIEW"].includes(item.status)) return item;
+    const now = this.clock.now();
+    return this.save({
+      ...item,
+      status: "CONTACTED",
+      data: {
+        ...item.data,
+        contactAttempts: (item.data.contactAttempts ?? 0) + 1,
+        lastContactAt: now,
+        lastActivity: `Collection request sent via ${item.data.contactChannel}`,
+        nextAction: "AWAIT_CUSTOMER_RESPONSE"
+      }
+    }, "CONTACT_RECEIVABLE", { contacted: true, channel: item.data.contactChannel, contactAttempt: (item.data.contactAttempts ?? 0) + 1 });
+  }
+
+  recordReceivableOutcome(id: string, outcome: "PROMISE" | "DISPUTE" | "PAID"): RevenueObject<ReceivableData> {
+    const item = this.require<ReceivableData>(id, "RECEIVABLE");
+    if (item.status === "PAID") return item;
+    if (item.status !== "CONTACTED") throw new Error("Contact the buyer before recording an outcome");
+    const now = this.clock.now();
+
+    if (outcome === "PROMISE") {
+      const promiseId = item.data.linkedPromiseId ?? `promise_${item.id}`;
+      const promisedAt = now + 86_400;
+      this.repository.upsertRevenueObject(object<PromiseData>({
+        id: promiseId,
+        kind: "PROMISE",
+        status: "OPEN",
+        amount: item.amount,
+        currency: item.currency,
+        priority: Math.max(80, item.priority),
+        customerRef: item.customerRef,
+        data: {
+          dueAt: promisedAt,
+          channel: item.data.contactChannel,
+          confidence: .86,
+          linkedReceivableId: item.id,
+          reminderAt: null,
+          keptAt: null,
+          stoppingRule: "Pause until promise due; one consented reminder; then merchant review",
+          workflowStage: "PAUSED_UNTIL_DUE",
+          reminderSentAt: null,
+          graceExpiresAt: null,
+          contactAttempts: 0,
+          maxContactAttempts: 1,
+          lastActivityAt: now,
+          lastActivity: "B2B payment promise captured and contact paused",
+          consentVerified: true
+        }
+      }, now), "receivables-agent");
+      return this.save({
+        ...item,
+        status: "PROMISE_CAPTURED",
+        data: { ...item.data, response: outcome, promisedAt, linkedPromiseId: promiseId, nextAction: "TRACK_PROMISE", lastActivity: "Customer promise captured; follow-up moved to the promise pipeline" }
+      }, "RECEIVABLE_PROMISE_CAPTURED", { promiseId, promisedAt });
+    }
+
+    if (outcome === "DISPUTE") {
+      return this.save({
+        ...item,
+        status: "HUMAN_REVIEW",
+        data: { ...item.data, response: outcome, nextAction: "RESOLVE_BUYER_DISPUTE", lastActivity: "Buyer disputed the invoice; automatic collection stopped" }
+      }, "RECEIVABLE_DISPUTE_CAPTURED", { automaticContactStopped: true });
+    }
+
+    return this.save({
+      ...item,
+      status: "PAID",
+      data: { ...item.data, response: outcome, recoveredAmount: item.amount, nextAction: "STOP_PAID", lastActivity: "Payment verified; collection workflow closed" }
+    }, "RECEIVABLE_PAYMENT_RECONCILED", { recoveredAmount: item.amount });
   }
 
   resolveReceivableBlocker(id: string): RevenueObject<ReceivableData> {

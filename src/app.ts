@@ -405,6 +405,12 @@ export async function buildApplication(options: BuildOptions = {}): Promise<AppC
     try { return revenueIntelligence.resolveReceivableBlocker(request.params.id); }
     catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : "Blocker resolution failed" }); }
   });
+  app.post<{ Params: { id: string }; Body: unknown }>("/api/revenue/receivables/:id/outcome", async (request, reply) => {
+    try {
+      const body = parseJsonBody(request.body, z.object({ outcome: z.enum(["PROMISE", "DISPUTE", "PAID"]) }));
+      return revenueIntelligence.recordReceivableOutcome(request.params.id, body.outcome);
+    } catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : "Receivable outcome failed" }); }
+  });
   app.post<{ Params: { id: string } }>("/api/revenue/mandates/:id/advance", async (request, reply) => {
     try { return revenueIntelligence.advanceMandate(request.params.id); }
     catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : "Mandate sequencing failed" }); }

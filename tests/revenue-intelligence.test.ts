@@ -44,6 +44,42 @@ test("active checkout is observed while abandoned checkout reuses the original l
   repository.close();
 });
 
+test("B2B receivable advances from blocker to outreach and a tracked promise", () => {
+  const { repository, service } = setupService();
+  let receivable = service.contactReceivable("recv_acme_1042");
+  assert.equal(receivable.status, "HUMAN_REVIEW");
+  assert.equal(receivable.data.nextAction, "RESOLVE_DOCUMENT_BLOCKER");
+
+  receivable = service.resolveReceivableBlocker(receivable.id);
+  assert.equal(receivable.status, "READY_TO_CONTACT");
+  receivable = service.contactReceivable(receivable.id);
+  assert.equal(receivable.status, "CONTACTED");
+  assert.equal(receivable.data.nextAction, "AWAIT_CUSTOMER_RESPONSE");
+  assert.equal(receivable.data.contactAttempts, 1);
+
+  receivable = service.recordReceivableOutcome(receivable.id, "PROMISE");
+  assert.equal(receivable.status, "PROMISE_CAPTURED");
+  assert.ok(receivable.data.linkedPromiseId);
+  const promise = service.snapshot().promises.find((item) => item.id === receivable.data.linkedPromiseId)!;
+  assert.equal(promise.data.linkedReceivableId, receivable.id);
+  assert.equal(promise.data.workflowStage, "PAUSED_UNTIL_DUE");
+  assert.equal(repository.verifyAuditChain().valid, true);
+  repository.close();
+});
+
+test("paid B2B receivable is terminal and cannot be contacted again", () => {
+  const { repository, service } = setupService();
+  let receivable = service.contactReceivable("recv_orbit_1049");
+  receivable = service.recordReceivableOutcome(receivable.id, "PAID");
+  assert.equal(receivable.status, "PAID");
+  assert.equal(receivable.data.recoveredAmount, receivable.amount);
+  const operationCount = repository.listRevenueOperations().length;
+  const unchanged = service.contactReceivable(receivable.id);
+  assert.equal(unchanged.status, "PAID");
+  assert.equal(repository.listRevenueOperations().length, operationCount);
+  repository.close();
+});
+
 test("incident circuit breaker requires resolution and releases recovery traffic in stages", () => {
   const { repository, service } = setupService();
   assert.throws(() => service.releaseIncident("inc_hdfc_card"), /Resolve the incident/);

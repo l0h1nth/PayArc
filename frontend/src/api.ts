@@ -73,6 +73,7 @@ export const api = {
   advanceSubscription: (id: string) => request<RevenueObject<never>>(`/api/revenue/subscriptions/${id}/advance`, { method: "POST" }),
   contactReceivable: (id: string) => request<RevenueObject<never>>(`/api/revenue/receivables/${id}/contact`, { method: "POST" }),
   resolveReceivableBlocker: (id: string) => request<RevenueObject<never>>(`/api/revenue/receivables/${id}/resolve-blocker`, { method: "POST" }),
+  recordReceivableOutcome: (id: string, outcome: "PROMISE" | "DISPUTE" | "PAID") => request<RevenueObject<never>>(`/api/revenue/receivables/${id}/outcome`, { method: "POST", body: JSON.stringify({ outcome }) }),
   advanceMandate: (id: string) => request<RevenueObject<never>>(`/api/revenue/mandates/${id}/advance`, { method: "POST" }),
   respondConversation: (id: string, intent: string) => request<RevenueObject<never>>(`/api/revenue/conversations/${id}/respond`, { method: "POST", body: JSON.stringify({ intent }) }),
   updatePromise: (id: string, outcome: string) => request<RevenueObject<never>>(`/api/revenue/promises/${id}/outcome`, { method: "POST", body: JSON.stringify({ outcome }) }),

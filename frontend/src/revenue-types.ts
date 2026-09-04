@@ -32,6 +32,8 @@ export type SubscriptionData = {
 export type ReceivableData = {
   buyer: string; invoiceNumber: string; dueAt: number; daysOverdue: number; blocker: string | null;
   contactChannel: string; promisedAt: number | null; recoveredAmount: number; nextAction: string;
+  contactAttempts?: number; lastContactAt?: number | null; response?: "PROMISE" | "DISPUTE" | "PAID" | null;
+  linkedPromiseId?: string | null; lastActivity?: string;
 };
 
 export type MandateStep = { label: string; status: string; scheduledAt: number | null };

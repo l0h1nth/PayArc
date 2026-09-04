@@ -79,6 +79,11 @@ export type ReceivableData = {
   promisedAt: number | null;
   recoveredAmount: number;
   nextAction: string;
+  contactAttempts?: number;
+  lastContactAt?: number | null;
+  response?: "PROMISE" | "DISPUTE" | "PAID" | null;
+  linkedPromiseId?: string | null;
+  lastActivity?: string;
 };
 
 export type MandateStep = {

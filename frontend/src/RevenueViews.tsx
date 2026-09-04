@@ -97,7 +97,42 @@ export function SubscriptionsView({ subscriptions, mandates, busy, mutate }: { s
 export function ReceivablesView({ items, busy, mutate }: { items: Array<RevenueObject<ReceivableData>>; busy: boolean; mutate: Mutate }) {
   return <div className="revenue-page">
     <PageIntro eyebrow="B2B receivables" title="Invoice blocker and collections desk" detail="Resolve operational blockers such as missing PO or GST details before contacting buyers, then capture disputes and promises against the authoritative invoice."/>
-    <div className="receivable-grid">{items.map((item) => <article className="receivable-card panel" key={item.id}><div className="card-top"><div className="object-icon"><Building2/></div><div><span>{item.data.invoiceNumber}</span><h3>{item.data.buyer}</h3></div><Pill value={item.status}/></div><strong className="large-amount">{money(item.amount)}</strong><div className="receivable-aging"><span>{item.data.daysOverdue} days overdue</span><div><i style={{ width: `${Math.min(100, item.data.daysOverdue * 4)}%` }}/></div><small>Due {date(item.data.dueAt)}</small></div>{item.data.blocker ? <div className="blocker-box"><AlertTriangle/><div><span>Invoice blocker detected</span><strong>{words(item.data.blocker)}</strong></div></div> : <div className="next-action"><Bot/><div><span>Next best action</span><strong>{words(item.data.nextAction)} via {words(item.data.contactChannel)}</strong></div></div>}<div className="card-actions">{item.data.blocker && <button disabled={busy} onClick={() => void mutate("Invoice blocker resolved", () => import("./api").then(({ api }) => api.resolveReceivableBlocker(item.id)))}><Check/>Resolve blocker</button>}<button className={item.data.blocker ? "secondary-button" : ""} disabled={busy} onClick={() => void mutate("Receivable workflow advanced", () => import("./api").then(({ api }) => api.contactReceivable(item.id)))}><MessageSquareText/>Run next action</button></div></article>)}</div>
+    <div className="receivable-grid">{items.map((item) => {
+      const terminal = ["PAID", "CANCELLED"].includes(item.status);
+      const contacted = item.status === "CONTACTED";
+      const promiseCaptured = item.status === "PROMISE_CAPTURED";
+      const needsReview = item.status === "HUMAN_REVIEW" && !item.data.blocker;
+      const decision = item.status === "PAID"
+        ? "Payment reconciled — collection stopped"
+        : contacted
+          ? "Buyer contacted — record their response"
+          : promiseCaptured
+            ? "Promise tracked automatically"
+            : needsReview
+              ? "Merchant review required"
+              : words(item.data.nextAction);
+      return <article className="receivable-card panel" key={item.id}>
+        <div className="card-top"><div className="object-icon"><Building2/></div><div><span>{item.data.invoiceNumber}</span><h3>{item.data.buyer}</h3></div><Pill value={item.status}/></div>
+        <strong className="large-amount">{money(item.amount)}</strong>
+        <div className="receivable-aging"><span>{item.data.daysOverdue} days overdue</span><div><i style={{ width: `${Math.min(100, item.data.daysOverdue * 4)}%` }}/></div><small>Due {date(item.data.dueAt)}</small></div>
+        {item.data.blocker
+          ? <div className="blocker-box"><AlertTriangle/><div><span>Invoice blocker detected</span><strong>{words(item.data.blocker)}</strong></div></div>
+          : <div className="next-action"><Bot/><div><span>{terminal ? "Workflow result" : "Current next step"}</span><strong>{decision}</strong></div></div>}
+        {item.data.lastActivity && <div className="receivable-activity"><Activity/><span>{item.data.lastActivity}{item.data.lastContactAt ? ` · ${date(item.data.lastContactAt)}` : ""}</span></div>}
+        <div className="card-actions receivable-actions">
+          {item.data.blocker && <button disabled={busy} onClick={() => void mutate("Invoice blocker resolved; invoice is ready for outreach", () => import("./api").then(({ api }) => api.resolveReceivableBlocker(item.id)))}><Check/>Resolve blocker</button>}
+          {!item.data.blocker && !terminal && !contacted && !promiseCaptured && !needsReview && <button disabled={busy} onClick={() => void mutate(`Collection request sent via ${words(item.data.contactChannel)}`, () => import("./api").then(({ api }) => api.contactReceivable(item.id)))}><MessageSquareText/>Send {words(item.data.contactChannel)} request</button>}
+          {contacted && <>
+            <button disabled={busy} onClick={() => void mutate("Payment promise captured and added to the promise pipeline", () => import("./api").then(({ api }) => api.recordReceivableOutcome(item.id, "PROMISE")))}><CalendarClock/>Record promise</button>
+            <button className="secondary-button" disabled={busy} onClick={() => void mutate("Invoice dispute recorded; automatic contact stopped", () => import("./api").then(({ api }) => api.recordReceivableOutcome(item.id, "DISPUTE")))}><AlertTriangle/>Record dispute</button>
+            <button className="secondary-button" disabled={busy} onClick={() => void mutate("Receivable payment reconciled", () => import("./api").then(({ api }) => api.recordReceivableOutcome(item.id, "PAID")))}><CheckCircle2/>Mark paid</button>
+          </>}
+          {promiseCaptured && <a className="receivable-link-button" href="?view=conversations"><Route/>View promise pipeline<ArrowRight/></a>}
+          {needsReview && <span className="receivable-terminal review"><UserCheck/>Automatic collection stopped for merchant review</span>}
+          {terminal && <span className="receivable-terminal paid"><CheckCircle2/>Workflow complete—no further collection actions</span>}
+        </div>
+      </article>;
+    })}</div>
   </div>;
 }
 
