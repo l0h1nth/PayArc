@@ -56,6 +56,13 @@ export type JourneyData = {
   contactEligible: boolean;
   recoveredAmount: number;
   reason: string;
+  workflowStage?: "SESSION_OPEN" | "ACTIVE_OBSERVATION" | "ABANDONED" | "RECOVERY_PATH_READY" | "PAID";
+  recoveryPath?: "ORIGINAL_CHECKOUT" | "BOUNDED_LINK" | null;
+  abandonedAt?: number | null;
+  recoveryScheduledAt?: number | null;
+  paidAt?: number | null;
+  lastActivityAt?: number;
+  lastActivity?: string;
 };
 
 export type SubscriptionData = {
@@ -67,6 +74,10 @@ export type SubscriptionData = {
   recommendedAction: string;
   nextActionAt: number | null;
   outstandingAmount: number;
+  workflowStage?: "PROVIDER_RETRY_PENDING" | "METHOD_UPDATE_REQUIRED" | "METHOD_UPDATE_SENT" | "RETRY_SCHEDULED" | "RECOVERED";
+  methodUpdateRequestedAt?: number | null;
+  lastActivityAt?: number;
+  lastActivity?: string;
 };
 
 export type ReceivableData = {
@@ -100,6 +111,8 @@ export type MandateData = {
   duplicateDebitRisk: boolean;
   steps: MandateStep[];
   nextAttemptAt: number | null;
+  lastEvaluatedAt?: number;
+  lastActivity?: string;
 };
 
 export type ConversationMessage = {

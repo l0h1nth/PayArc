@@ -115,6 +115,7 @@ test("scenario endpoints remain disabled in production", async () => {
   assert.equal((await context.app.inject({ method: "GET", url: "/api/demo/runs" })).statusCode, 404);
   assert.equal((await context.app.inject({ method: "GET", url: "/api/demo/runs/run_unknown" })).statusCode, 404);
   assert.equal((await context.app.inject({ method: "POST", url: "/api/demo/scenarios/incorrect-otp/run" })).statusCode, 404);
+  assert.equal((await context.app.inject({ method: "POST", url: "/api/demo/revenue/journeys/journey_unknown/pay" })).statusCode, 404);
   await context.app.close();
   repository.close();
 });

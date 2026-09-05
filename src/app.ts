@@ -467,14 +467,20 @@ export async function buildApplication(options: BuildOptions = {}): Promise<AppC
   app.post<{ Params: { id: string }; Body: unknown }>("/api/revenue/journeys/:id/signal", async (request, reply) => {
     try {
       const body = parseJsonBody(request.body, z.object({
-        stage: z.enum(["CHECKOUT_OPENED", "METHOD_SELECTED", "OTP", "FAILED", "ABANDONED", "PAID"]),
+        stage: z.enum(["CHECKOUT_OPENED", "METHOD_SELECTED", "OTP", "FAILED", "ABANDONED"]),
         customerActive: z.boolean(),
         paymentMethod: z.string().min(2).max(40).optional()
       }));
       return revenueIntelligence.signalJourney(request.params.id, body);
-    } catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : "Journey signal failed" }); }
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return reply.code(400).send({ error: "Invalid journey signal", details: error.issues });
+      }
+      return reply.code(409).send({ error: error instanceof Error ? error.message : "Journey signal failed" });
+    }
   });
-  app.post<{ Params: { id: string } }>("/api/revenue/journeys/:id/pay", async (request, reply) => {
+  app.post<{ Params: { id: string } }>("/api/demo/revenue/journeys/:id/pay", async (request, reply) => {
+    if (config.nodeEnv === "production") return reply.code(404).send({ error: "Demo payment outcomes are disabled in production" });
     try { return revenueIntelligence.payJourney(request.params.id); }
     catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : "Payment verification failed" }); }
   });

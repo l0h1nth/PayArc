@@ -825,7 +825,7 @@ export function App() {
     if (view === "overview") content = <Overview data={data} onView={switchView} onOpenCase={openCase}/>;
     if (view === "portfolio") content = <PortfolioView revenue={data.revenue} busy={drawerBusy} mutate={revenueAction}/>;
     if (view === "incidents") content = <IncidentsView items={data.revenue.incidents} busy={drawerBusy} mutate={revenueAction}/>;
-    if (view === "journeys") content = <JourneysView items={data.revenue.journeys} busy={drawerBusy} mutate={revenueAction}/>;
+    if (view === "journeys") content = <JourneysView items={data.revenue.journeys} cases={data.cases} demoMode={authSession?.demoMode ?? false} busy={drawerBusy} mutate={revenueAction} onOpenCase={openCase}/>;
     if (view === "subscriptions") content = <SubscriptionsView subscriptions={data.revenue.subscriptions} mandates={data.revenue.mandates} busy={drawerBusy} mutate={revenueAction}/>;
     if (view === "receivables") content = <ReceivablesView items={data.revenue.receivables} busy={drawerBusy} mutate={revenueAction}/>;
     if (view === "conversations") content = <ConversationsView conversations={data.revenue.conversations} promises={data.revenue.promises} busy={drawerBusy} mutate={revenueAction}/>;

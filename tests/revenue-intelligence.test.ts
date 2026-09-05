@@ -36,11 +36,43 @@ test("active checkout is observed while abandoned checkout reuses the original l
   assert.equal(active.status, "OBSERVING");
   assert.equal(active.data.contactEligible, false);
   assert.equal(active.data.recommendedAction, "OBSERVE_ACTIVE_RETRY");
+  assert.equal(active.data.workflowStage, "ACTIVE_OBSERVATION");
+  assert.equal(active.data.recoveryPath, null);
+  assert.match(active.data.lastActivity ?? "", /outreach and duplicate checkout remain suppressed/);
 
   const abandoned = service.recoverJourney("journey_abandoned_otp");
   assert.equal(abandoned.status, "RECOVERY_SCHEDULED");
   assert.equal(abandoned.data.recommendedAction, "REUSE_EXISTING_CHECKOUT");
+  assert.equal(abandoned.data.workflowStage, "RECOVERY_PATH_READY");
+  assert.equal(abandoned.data.recoveryPath, "ORIGINAL_CHECKOUT");
+  assert.match(abandoned.data.lastActivity ?? "", /no duplicate link created/);
+
+  const expired = service.recoverJourney("journey_expired");
+  assert.equal(expired.status, "LINK_REQUIRED");
+  assert.equal(expired.data.recoveryPath, "BOUNDED_LINK");
+  assert.equal(expired.data.workflowStage, "RECOVERY_PATH_READY");
   assert.ok(repository.listRevenueOperations().some((item) => item.operation === "RECOVER_JOURNEY"));
+  repository.close();
+});
+
+test("verified checkout payment is terminal and clears every contradictory journey action", () => {
+  const { repository, service } = setupService();
+  const paid = service.payJourney("journey_active_retry");
+  assert.equal(paid.status, "PAID");
+  assert.equal(paid.data.stage, "PAID");
+  assert.equal(paid.data.workflowStage, "PAID");
+  assert.equal(paid.data.customerActive, false);
+  assert.equal(paid.data.contactEligible, false);
+  assert.equal(paid.data.recommendedAction, "STOP_RECOVERED");
+  assert.equal(paid.data.recoveryPath, null);
+  assert.equal(paid.data.recoveredAmount, paid.amount);
+  assert.match(paid.data.lastActivity ?? "", /every pending recovery action was cancelled/);
+
+  const operationCount = repository.listRevenueOperations().length;
+  assert.equal(service.recoverJourney(paid.id).status, "PAID");
+  assert.equal(service.payJourney(paid.id).status, "PAID");
+  assert.equal(repository.listRevenueOperations().length, operationCount);
+  assert.throws(() => service.signalJourney(paid.id, { stage: "ABANDONED", customerActive: false }), /cannot be reopened/);
   repository.close();
 });
 
@@ -98,6 +130,35 @@ test("unsafe mandate retries fail closed without advancing the sequence", () => 
   assert.equal(after.status, "BLOCKED");
   assert.equal(after.data.attempt, before.data.attempt);
   assert.equal(after.data.nextAttemptAt, null);
+  assert.match(after.data.lastActivity ?? "", /remains blocked/);
+  repository.close();
+});
+
+test("recurring revenue actions expose each safe subscription and mandate transition", () => {
+  const { repository, service } = setupService();
+
+  let subscription = service.advanceSubscription("sub_cloud_halted");
+  assert.equal(subscription.status, "METHOD_UPDATE_SENT");
+  assert.equal(subscription.data.workflowStage, "METHOD_UPDATE_SENT");
+  assert.equal(subscription.data.recommendedAction, "AWAIT_PAYMENT_METHOD_UPDATE");
+  assert.match(subscription.data.lastActivity ?? "", /update request sent/i);
+
+  subscription = service.advanceSubscription(subscription.id);
+  assert.equal(subscription.status, "RETRY_SCHEDULED");
+  assert.equal(subscription.data.workflowStage, "RETRY_SCHEDULED");
+  assert.equal(subscription.data.recommendedAction, "RUN_BOUNDED_RETRY");
+  assert.ok(subscription.data.nextActionAt);
+
+  const providerRetry = service.advanceSubscription("sub_stream_pro");
+  assert.equal(providerRetry.status, "PROVIDER_RETRY");
+  assert.equal(providerRetry.data.workflowStage, "PROVIDER_RETRY_PENDING");
+  assert.match(providerRetry.data.lastActivity ?? "", /competing debit/);
+
+  const mandate = service.advanceMandate("mandate_upi_22");
+  assert.equal(mandate.status, "SEQUENCING");
+  assert.equal(mandate.data.steps.find((step) => step.status === "CURRENT")?.label, "Mandate update");
+  assert.match(mandate.data.lastActivity ?? "", /scheduled as the next bounded attempt/);
+  assert.equal(repository.verifyAuditChain().valid, true);
   repository.close();
 });
 
@@ -234,10 +295,58 @@ test("checkout SDK API registers a journey, detects abandonment, and forbids reo
   const abandoned = await context.app.inject({ method: "POST", url: `/api/revenue/journeys/${id}/signal`, payload: { stage: "ABANDONED", customerActive: false } });
   assert.equal(abandoned.statusCode, 200);
   assert.equal(abandoned.json().data.recommendedAction, "REUSE_EXISTING_CHECKOUT");
-  const paid = await context.app.inject({ method: "POST", url: `/api/revenue/journeys/${id}/signal`, payload: { stage: "PAID", customerActive: false } });
+  const untrustedPaidSignal = await context.app.inject({ method: "POST", url: `/api/revenue/journeys/${id}/signal`, payload: { stage: "PAID", customerActive: false } });
+  assert.equal(untrustedPaidSignal.statusCode, 400);
+  const paid = await context.app.inject({ method: "POST", url: `/api/demo/revenue/journeys/${id}/pay`, payload: {} });
+  assert.equal(paid.statusCode, 200);
   assert.equal(paid.json().data.recoveredAmount, 98_900);
   const reopened = await context.app.inject({ method: "POST", url: `/api/revenue/journeys/${id}/signal`, payload: { stage: "FAILED", customerActive: true } });
   assert.equal(reopened.statusCode, 409);
+  await context.app.close();
+  repository.close();
+});
+
+test("signed Razorpay payment events reconcile the matching checkout journey", async () => {
+  const repository = new RecoveryRepository(":memory:");
+  const clock = new TestClock();
+  const config = testConfig();
+  const context = await buildApplication({ config, repository, clock });
+  const journey = context.revenueIntelligence.registerJourney({
+    customerRef: "cus_signed_journey",
+    orderId: "order_signed_journey",
+    amount: 98_900,
+    currency: "INR",
+    originalCheckoutUrl: "https://rzp.io/i/signed-journey",
+    checkoutExpiresAt: clock.now() + 86_400,
+    paymentMethod: "upi"
+  });
+  const raw = JSON.stringify({
+    entity: "event",
+    account_id: "acc_test",
+    event: "order.paid",
+    contains: ["order"],
+    created_at: clock.now(),
+    payload: { order: { entity: {
+      id: "order_signed_journey",
+      entity: "order",
+      amount: 98_900,
+      amount_paid: 98_900,
+      currency: "INR",
+      status: "paid"
+    } } }
+  });
+  const response = await context.app.inject({ method: "POST", url: "/webhooks/razorpay", payload: raw, headers: {
+    "content-type": "application/json",
+    "x-razorpay-event-id": "evt_signed_journey_paid",
+    "x-razorpay-signature": signWebhook(raw, config.razorpay.webhookSecrets[0]!)
+  } });
+  assert.equal(response.statusCode, 202);
+  const paid = context.revenueIntelligence.snapshot().journeys.find((item) => item.id === journey.id)!;
+  assert.equal(paid.status, "PAID");
+  assert.equal(paid.data.workflowStage, "PAID");
+  assert.equal(paid.data.recoveredAmount, 98_900);
+  assert.match(paid.data.lastActivity ?? "", /Signed Razorpay payment verified/);
+  assert.ok(repository.listRevenueOperations().some((operation) => operation.objectId === journey.id && operation.operation === "VERIFY_JOURNEY_PAYMENT"));
   await context.app.close();
   repository.close();
 });

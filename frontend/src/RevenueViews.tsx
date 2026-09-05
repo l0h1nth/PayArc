@@ -10,6 +10,7 @@ import type {
   ConversationData, IncidentData, JourneyData, MandateData, PromiseData, PromiseWorkflowStage,
   ReceivableData, RevenueObject, RevenueSnapshot, SubscriptionData
 } from "./revenue-types";
+import type { RecoveryCase } from "./types";
 
 type Mutate = (label: string, task: () => Promise<unknown>) => Promise<void>;
 
@@ -74,23 +75,146 @@ export function IncidentsView({ items, busy, mutate }: { items: Array<RevenueObj
   </div>;
 }
 
-export function JourneysView({ items, busy, mutate }: { items: Array<RevenueObject<JourneyData>>; busy: boolean; mutate: Mutate }) {
+function journeyStage(item: RevenueObject<JourneyData>) {
+  if (item.status === "PAID" || item.data.stage === "PAID") return "PAID";
+  if (item.data.workflowStage) return item.data.workflowStage;
+  if (["RECOVERY_SCHEDULED", "LINK_REQUIRED"].includes(item.status)) return "RECOVERY_PATH_READY";
+  if (["ABANDONED", "EXPIRED"].includes(item.status)) return "ABANDONED";
+  if (item.data.stage === "CHECKOUT_OPENED") return "SESSION_OPEN";
+  return "ACTIVE_OBSERVATION";
+}
+
+function JourneyPipeline({ item }: { item: RevenueObject<JourneyData> }) {
+  const steps = ["Session", "Observe", "Abandoned", "Recovery path", "Verified paid"];
+  const stage = journeyStage(item);
+  const current = stage === "SESSION_OPEN" ? 0 : stage === "ACTIVE_OBSERVATION" ? 1 : stage === "ABANDONED" ? 2 : stage === "RECOVERY_PATH_READY" ? 3 : 4;
+  return <div className="journey-pipeline" aria-label={`Current checkout journey stage: ${words(stage)}`}>
+    {steps.map((step, index) => <div className={index < current || stage === "PAID" ? "done" : index === current ? "current" : "queued"} key={step}>
+      <i>{index < current || stage === "PAID" ? <Check/> : index + 1}</i><span>{step}</span>
+    </div>)}
+  </div>;
+}
+
+export function JourneysView({ items, cases, demoMode, busy, mutate, onOpenCase }: { items: Array<RevenueObject<JourneyData>>; cases: RecoveryCase[]; demoMode: boolean; busy: boolean; mutate: Mutate; onOpenCase: (id: string) => void }) {
+  const [filter, setFilter] = useState<"ALL" | "ACTIVE" | "ABANDONED" | "RECOVERY" | "PAID">("ALL");
+  const counts = {
+    ACTIVE: items.filter((item) => ["SESSION_OPEN", "ACTIVE_OBSERVATION"].includes(journeyStage(item))).length,
+    ABANDONED: items.filter((item) => journeyStage(item) === "ABANDONED").length,
+    RECOVERY: items.filter((item) => journeyStage(item) === "RECOVERY_PATH_READY").length,
+    PAID: items.filter((item) => journeyStage(item) === "PAID").length
+  };
+  const visible = [...items]
+    .filter((item) => filter === "ALL" || journeyStage(item) === filter || (filter === "ACTIVE" && ["SESSION_OPEN", "ACTIVE_OBSERVATION"].includes(journeyStage(item))) || (filter === "RECOVERY" && journeyStage(item) === "RECOVERY_PATH_READY"))
+    .sort((left, right) => Number(journeyStage(left) === "PAID") - Number(journeyStage(right) === "PAID") || right.updatedAt - left.updatedAt);
   return <div className="revenue-page">
     <PageIntro eyebrow="Checkout abandonment" title="Customer journey rescue" detail="Observe active retries, reuse the original Razorpay checkout whenever possible, and create a bounded replacement only when the original has expired."/>
-    <div className="journey-list">{items.map((item) => <article className="journey-card panel" key={item.id}>
-      <div className="journey-main"><div className="object-icon"><Route/></div><div><div className="title-line"><h3>{item.customerRef}</h3><Pill value={item.status}/></div><span>{item.data.sessionId} · {words(item.data.paymentMethod)}</span><p>{item.data.reason}</p></div></div>
-      <div className="journey-stage"><span>Checkout stage</span><div className="stage-track">{["CHECKOUT_OPENED", "METHOD_SELECTED", "OTP", "FAILED", "ABANDONED"].map((stage) => <i className={stage === item.data.stage ? "current" : ""} key={stage} title={words(stage)}/>)}</div><strong>{words(item.data.stage)}</strong></div>
-      <div className="journey-decision"><div><span>At risk</span><strong>{money(item.amount)}</strong></div><div><span>Autopilot decision</span><strong>{words(item.data.recommendedAction)}</strong></div><div><span>Existing checkout</span><strong>{item.data.originalCheckoutUrl && item.data.checkoutExpiresAt > Date.now() / 1000 ? "Reusable" : "Unavailable"}</strong></div></div>
-      <div className="card-actions"><button disabled={busy || item.status === "PAID"} onClick={() => void mutate("Journey decision executed", () => import("./api").then(({ api }) => api.recoverJourney(item.id)))}>{item.data.customerActive ? <><Ban/>Keep observing</> : item.data.recommendedAction === "CREATE_BOUNDED_LINK" ? <><Link2/>Prepare bounded link</> : <><Link2/>Reuse checkout</>}</button>{item.data.customerActive && <button className="secondary-button" disabled={busy} onClick={() => void mutate("Checkout abandonment detected", () => import("./api").then(({ api }) => api.signalJourney(item.id, "ABANDONED", false)))}><Route/>Simulate abandonment</button>}{item.status !== "PAID" && <button className="secondary-button" disabled={busy} onClick={() => void mutate("Razorpay payment verified", () => import("./api").then(({ api }) => api.payJourney(item.id)))}><CreditCard/>Simulate paid webhook</button>}</div>
-    </article>)}</div>
+    <div className="journey-toolbar panel"><div><strong>{items.length}</strong><span>Total journeys</span></div>{(["ALL", "ACTIVE", "ABANDONED", "RECOVERY", "PAID"] as const).map((value) => <button className={filter === value ? "active" : ""} onClick={() => setFilter(value)} key={value}>{words(value)} <span>{value === "ALL" ? items.length : counts[value]}</span></button>)}</div>
+    <div className="journey-list">{visible.map((item) => {
+      const stage = journeyStage(item);
+      const terminal = stage === "PAID";
+      const checkoutValid = Boolean(item.data.originalCheckoutUrl) && item.data.checkoutExpiresAt > Date.now() / 1000;
+      const recoveryReady = stage === "RECOVERY_PATH_READY";
+      const recoveryCase = item.data.orderId ? cases.find((candidate) => candidate.orderId === item.data.orderId) : undefined;
+      const actionLabel = item.data.customerActive
+        ? "Recheck customer activity"
+        : checkoutValid ? "Schedule original checkout" : "Request bounded recovery";
+      const actionFeedback = item.data.customerActive
+        ? "Customer is still active—outreach remains suppressed"
+        : checkoutValid ? "Original checkout selected; no duplicate link created" : "Bounded recovery requested; waiting for signed provider evidence";
+      const checkoutState = terminal ? "Closed after payment" : item.data.recoveryPath === "ORIGINAL_CHECKOUT" ? "Selected for reuse" : checkoutValid ? "Reusable" : "Expired / unavailable";
+      return <article className={`journey-card panel ${terminal ? "terminal" : ""}`} key={item.id}>
+        <div className="journey-main"><div className="object-icon"><Route/></div><div><div className="title-line"><h3>{item.customerRef}</h3><Pill value={item.status}/></div><span>{item.data.sessionId} · {words(item.data.paymentMethod)}</span><p>{item.data.reason}</p></div></div>
+        <div className="journey-decision"><div><span>{terminal ? "Recovered" : "At risk"}</span><strong className={terminal ? "positive" : ""}>{money(terminal ? item.data.recoveredAmount : item.amount)}</strong></div><div><span>Autopilot decision</span><strong>{words(item.data.recommendedAction)}</strong></div><div><span>Original checkout</span><strong>{checkoutState}</strong></div></div>
+        <div className="journey-actions">{terminal
+          ? <div className="journey-complete"><CheckCircle2/><div><strong>Workflow complete</strong><span>No retry, message, or abandonment action can reopen this payment.</span></div></div>
+          : <>{recoveryReady
+            ? item.data.recoveryPath === "ORIGINAL_CHECKOUT" && item.data.originalCheckoutUrl
+              ? <a className="journey-primary-action" href={item.data.originalCheckoutUrl} target="_blank" rel="noreferrer"><Link2/>Open original checkout</a>
+              : recoveryCase
+                ? <button onClick={() => onOpenCase(recoveryCase.id)}><WalletCards/>Open Recovery Case</button>
+                : <div className="journey-awaiting"><Clock3/><div><strong>Await signed failure event</strong><span>The Recovery Case and bounded link are created only from provider evidence.</span></div></div>
+            : <button disabled={busy} onClick={() => void mutate(actionFeedback, () => import("./api").then(({ api }) => api.recoverJourney(item.id)))}>{item.data.customerActive ? <Ban/> : <Link2/>}{actionLabel}</button>}
+            {demoMode && item.data.customerActive && <button className="secondary-button" disabled={busy} onClick={() => void mutate("Checkout abandonment detected; recovery path can now be selected", () => import("./api").then(({ api }) => api.signalJourney(item.id, "ABANDONED", false)))}><Route/>Demo abandonment</button>}
+            {demoMode && <button className="secondary-button" disabled={busy} onClick={() => void mutate("Demo paid outcome applied; recovery stopped", () => import("./api").then(({ api }) => api.payJourney(item.id)))}><CreditCard/>Demo paid outcome</button>}</>}
+        </div>
+        <JourneyPipeline item={item}/>
+        <div className="journey-activity"><Activity/><div><span>Latest state change</span><strong>{item.data.lastActivity ?? item.data.reason}</strong><small>{item.data.lastActivityAt ? date(item.data.lastActivityAt) : `Updated ${date(item.updatedAt)}`}</small></div></div>
+      </article>;
+    })}{!visible.length && <div className="journey-empty panel"><Route/><strong>No journeys in this stage</strong><span>Choose another filter or create a fresh Checkout Journey demo from Scenario Lab.</span></div>}</div>
+  </div>;
+}
+
+function subscriptionStage(item: RevenueObject<SubscriptionData>) {
+  if (item.data.workflowStage) return item.data.workflowStage;
+  if (item.status === "PROVIDER_RETRY") return "PROVIDER_RETRY_PENDING";
+  if (item.status === "METHOD_UPDATE_SENT") return "METHOD_UPDATE_SENT";
+  if (item.status === "RETRY_SCHEDULED") return "RETRY_SCHEDULED";
+  if (item.status === "RECOVERED") return "RECOVERED";
+  return "METHOD_UPDATE_REQUIRED";
+}
+
+function SubscriptionPipeline({ item }: { item: RevenueObject<SubscriptionData> }) {
+  const stage = subscriptionStage(item);
+  const providerPath = stage === "PROVIDER_RETRY_PENDING";
+  const steps = providerPath
+    ? ["Failure", "Provider retry", "Verify payment", "Closed"]
+    : ["Failure", "Method update", "Bounded retry", "Verify payment"];
+  const current = stage === "PROVIDER_RETRY_PENDING" || stage === "METHOD_UPDATE_REQUIRED" || stage === "METHOD_UPDATE_SENT"
+    ? 1
+    : stage === "RETRY_SCHEDULED" ? 2 : 3;
+  return <div className="subscription-pipeline" aria-label={`Current subscription stage: ${words(stage)}`}>
+    {steps.map((step, index) => <div className={index < current ? "done" : index === current ? "current" : "queued"} key={step}>
+      <i>{index < current ? <Check/> : index + 1}</i><span>{step}</span>
+    </div>)}
   </div>;
 }
 
 export function SubscriptionsView({ subscriptions, mandates, busy, mutate }: { subscriptions: Array<RevenueObject<SubscriptionData>>; mandates: Array<RevenueObject<MandateData>>; busy: boolean; mutate: Mutate }) {
   return <div className="revenue-page">
     <PageIntro eyebrow="Recurring revenue" title="Subscription and mandate sequencer" detail="Honor provider-managed retries, request method updates when mandates are unrecoverable, and block attempts whenever duplicate-debit or bank-health risk is present."/>
-    <div className="split-layout"><section className="panel collection-panel"><div className="panel-heading"><div><span className="overline">Failed subscriptions</span><h3>Outstanding invoices</h3></div><span className="count-badge">{subscriptions.length}</span></div><div className="stack-list">{subscriptions.map((item) => <article className="subscription-row" key={item.id}><div className="object-icon"><RefreshCw/></div><div className="grow"><div className="title-line"><h4>{item.data.plan}</h4><Pill value={item.status}/></div><span>{item.data.invoiceId} · {item.customerRef}</span><div className="inline-facts"><span>{item.data.failedAttempts} failed attempts</span><span>{words(item.data.mandateStatus)}</span><span>{item.data.providerRetryAt ? `Provider retry ${date(item.data.providerRetryAt)}` : "Provider retries exhausted"}</span></div><strong className="decision-copy">{words(item.data.recommendedAction)}</strong></div><div className="row-end"><strong>{money(item.data.outstandingAmount)}</strong><button disabled={busy} onClick={() => void mutate("Subscription playbook advanced", () => import("./api").then(({ api }) => api.advanceSubscription(item.id)))}><Zap/>Advance</button></div></article>)}</div></section>
-      <section className="panel collection-panel"><div className="panel-heading"><div><span className="overline">Mandate retry sequencing</span><h3>Bounded attempt plans</h3></div><span className="count-badge">{mandates.length}</span></div><div className="stack-list">{mandates.map((item) => <article className="mandate-card" key={item.id}><div className="title-line"><div><span>{item.customerRef}</span><h4>{item.data.rail}</h4></div><Pill value={item.status}/></div><div className="sequence">{item.data.steps.map((step) => <div className={step.status.toLowerCase()} key={step.label}><i>{step.status === "DONE" ? <Check/> : step.status === "BLOCKED" ? <Ban/> : <Clock3/>}</i><div><strong>{step.label}</strong><span>{step.scheduledAt ? date(step.scheduledAt) : words(step.status)}</span></div></div>)}</div>{(item.data.duplicateDebitRisk || !item.data.bankHealthy) && <div className="risk-banner"><ShieldAlert/>Retry blocked: {item.data.duplicateDebitRisk ? "duplicate debit risk" : "bank unhealthy"}</div>}<button disabled={busy} onClick={() => void mutate("Mandate sequence evaluated", () => import("./api").then(({ api }) => api.advanceMandate(item.id)))}><Route/>Evaluate next step</button></article>)}</div></section></div>
+    <div className="split-layout">
+      <section className="panel collection-panel">
+        <div className="panel-heading"><div><span className="overline">Failed subscriptions</span><h3>Outstanding invoices</h3></div><span className="count-badge">{subscriptions.length}</span></div>
+        <div className="stack-list">{subscriptions.map((item) => {
+          const stage = subscriptionStage(item);
+          const awaitingProvider = stage === "PROVIDER_RETRY_PENDING";
+          const updateRequired = stage === "METHOD_UPDATE_REQUIRED";
+          const updateSent = stage === "METHOD_UPDATE_SENT";
+          const retryScheduled = stage === "RETRY_SCHEDULED";
+          const actionLabel = awaitingProvider ? "Recheck provider window" : updateRequired ? "Send update request" : updateSent ? "Confirm update & schedule" : retryScheduled ? "Retry scheduled" : "Workflow closed";
+          const feedback = awaitingProvider
+            ? "Provider retry respected—no competing debit created"
+            : updateRequired
+              ? "Payment-method update request sent; automatic debit paused"
+              : updateSent
+                ? "Updated mandate confirmed; one bounded retry scheduled"
+                : "Subscription workflow rechecked";
+          return <article className="subscription-row" key={item.id}>
+            <div className="subscription-summary"><div className="object-icon"><RefreshCw/></div><div className="grow"><div className="title-line"><h4>{item.data.plan}</h4><Pill value={item.status}/></div><span>{item.data.invoiceId} · {item.customerRef}</span><div className="inline-facts"><span>{item.data.failedAttempts} failed attempts</span><span>{words(item.data.mandateStatus)}</span><span>{item.data.providerRetryAt ? `Provider retry ${date(item.data.providerRetryAt)}` : "Provider retries exhausted"}</span></div></div><strong className="subscription-amount">{money(item.data.outstandingAmount)}</strong></div>
+            <SubscriptionPipeline item={item}/>
+            <div className="workflow-activity"><ShieldCheck/><div><span>Current decision</span><strong>{item.data.lastActivity ?? words(item.data.recommendedAction)}</strong>{item.data.lastActivityAt && <small>Updated {date(item.data.lastActivityAt)}</small>}</div></div>
+            <div className="subscription-action"><div><span>Next safe action</span><strong>{words(item.data.recommendedAction)}</strong>{item.data.nextActionAt && <small>{date(item.data.nextActionAt)}</small>}</div><button disabled={busy || retryScheduled || stage === "RECOVERED"} onClick={() => void mutate(feedback, () => import("./api").then(({ api }) => api.advanceSubscription(item.id)))}><Zap/>{actionLabel}</button></div>
+          </article>;
+        })}</div>
+      </section>
+      <section className="panel collection-panel">
+        <div className="panel-heading"><div><span className="overline">Mandate retry sequencing</span><h3>Bounded attempt plans</h3></div><span className="count-badge">{mandates.length}</span></div>
+        <div className="stack-list">{mandates.map((item) => {
+          const blocked = item.data.duplicateDebitRisk || !item.data.bankHealthy;
+          const terminal = item.status === "EXHAUSTED";
+          const nextStep = item.data.steps.find((step) => step.status === "QUEUED")?.label;
+          const actionLabel = blocked ? "Re-evaluate safety" : nextStep ? `Schedule ${nextStep}` : "Complete sequence";
+          const feedback = blocked ? "Safety rechecked—retry remains blocked" : nextStep ? `${nextStep} is now the next bounded attempt` : "Mandate sequence exhausted; automatic debits stopped";
+          return <article className="mandate-card" key={item.id}>
+            <div className="title-line"><div><span>{item.customerRef}</span><h4>{item.data.rail}</h4></div><Pill value={item.status}/></div>
+            <div className="sequence">{item.data.steps.map((step) => <div className={step.status.toLowerCase()} key={step.label}><i>{step.status === "DONE" ? <Check/> : step.status === "BLOCKED" ? <Ban/> : <Clock3/>}</i><div><strong>{step.label}</strong><span>{step.scheduledAt ? date(step.scheduledAt) : words(step.status)}</span></div></div>)}</div>
+            {blocked && <div className="risk-banner"><ShieldAlert/>Retry blocked: {item.data.duplicateDebitRisk ? "duplicate debit risk" : "bank unhealthy"}</div>}
+            {item.data.lastActivity && <div className="workflow-activity compact"><Activity/><div><span>Latest evaluation</span><strong>{item.data.lastActivity}</strong>{item.data.lastEvaluatedAt && <small>{date(item.data.lastEvaluatedAt)}</small>}</div></div>}
+            {terminal ? <div className="terminal-workflow"><ShieldCheck/><div><strong>Automatic sequence complete</strong><span>No more debits will be attempted. Manual checkout is the final safe path.</span></div></div> : <button disabled={busy} onClick={() => void mutate(feedback, () => import("./api").then(({ api }) => api.advanceMandate(item.id)))}><Route/>{actionLabel}</button>}
+          </article>;
+        })}</div>
+      </section>
+    </div>
   </div>;
 }
 

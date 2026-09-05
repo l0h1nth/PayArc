@@ -78,27 +78,27 @@ export class RevenueIntelligenceService {
       }, now),
       object<JourneyData>({
         id: "journey_active_retry", kind: "JOURNEY", status: "OBSERVING", amount: 98_900, currency: "INR", priority: 88, customerRef: "cus_8A2F",
-        data: { sessionId: "chk_81b2", orderId: "order_demo_active", stage: "FAILED", paymentMethod: "card", customerActive: true, originalCheckoutUrl: "https://rzp.io/i/original-989", checkoutExpiresAt: now + day, recommendedAction: "OBSERVE_ACTIVE_RETRY", nextActionAt: now + 900, contactEligible: false, recoveredAmount: 0, reason: "Customer is still active in Razorpay checkout; suppress duplicate outreach" }
+        data: { sessionId: "chk_81b2", orderId: "order_demo_active", stage: "FAILED", paymentMethod: "card", customerActive: true, originalCheckoutUrl: "https://rzp.io/i/original-989", checkoutExpiresAt: now + day, recommendedAction: "OBSERVE_ACTIVE_RETRY", nextActionAt: now + 900, contactEligible: false, recoveredAmount: 0, reason: "Customer is still active in Razorpay checkout; suppress duplicate outreach", workflowStage: "ACTIVE_OBSERVATION", recoveryPath: null, abandonedAt: null, recoveryScheduledAt: null, paidAt: null, lastActivityAt: now, lastActivity: "Customer remains active; recovery contact and duplicate checkout are suppressed" }
       }, now),
       object<JourneyData>({
         id: "journey_abandoned_otp", kind: "JOURNEY", status: "ABANDONED", amount: 249_900, currency: "INR", priority: 94, customerRef: "cus_51DE",
-        data: { sessionId: "chk_19ce", orderId: "order_demo_abandoned", stage: "ABANDONED", paymentMethod: "card", customerActive: false, originalCheckoutUrl: "https://rzp.io/i/existing-checkout", checkoutExpiresAt: now + 18 * hour, recommendedAction: "REUSE_EXISTING_CHECKOUT", nextActionAt: now + 300, contactEligible: true, recoveredAmount: 0, reason: "OTP failed and the existing checkout remains valid; recommend UPI without creating a duplicate link" }
+        data: { sessionId: "chk_19ce", orderId: "order_demo_abandoned", stage: "ABANDONED", paymentMethod: "card", customerActive: false, originalCheckoutUrl: "https://rzp.io/i/existing-checkout", checkoutExpiresAt: now + 18 * hour, recommendedAction: "REUSE_EXISTING_CHECKOUT", nextActionAt: now + 300, contactEligible: true, recoveredAmount: 0, reason: "OTP failed and the existing checkout remains valid; recommend UPI without creating a duplicate link", workflowStage: "ABANDONED", recoveryPath: null, abandonedAt: now, recoveryScheduledAt: null, paidAt: null, lastActivityAt: now, lastActivity: "Inactivity threshold reached; existing checkout passed the reuse check" }
       }, now),
       object<JourneyData>({
         id: "journey_expired", kind: "JOURNEY", status: "EXPIRED", amount: 79_900, currency: "INR", priority: 65, customerRef: "cus_77B1",
-        data: { sessionId: "chk_32a9", orderId: "order_demo_expired", stage: "ABANDONED", paymentMethod: "wallet", customerActive: false, originalCheckoutUrl: "", checkoutExpiresAt: now - hour, recommendedAction: "CREATE_BOUNDED_LINK", nextActionAt: now, contactEligible: true, recoveredAmount: 0, reason: "Original checkout expired; a new amount-bound Razorpay link is justified" }
+        data: { sessionId: "chk_32a9", orderId: "order_demo_expired", stage: "ABANDONED", paymentMethod: "wallet", customerActive: false, originalCheckoutUrl: "", checkoutExpiresAt: now - hour, recommendedAction: "CREATE_BOUNDED_LINK", nextActionAt: now, contactEligible: true, recoveredAmount: 0, reason: "Original checkout expired; a new amount-bound Razorpay link is justified", workflowStage: "ABANDONED", recoveryPath: null, abandonedAt: now - hour, recoveryScheduledAt: null, paidAt: null, lastActivityAt: now, lastActivity: "Original checkout expired; bounded recovery is the only eligible path" }
       }, now),
       object<JourneyData>({
         id: "journey_recovered", kind: "JOURNEY", status: "PAID", amount: 149_900, currency: "INR", priority: 20, customerRef: "cus_12AC",
-        data: { sessionId: "chk_70d1", orderId: "order_demo_paid", stage: "PAID", paymentMethod: "upi", customerActive: false, originalCheckoutUrl: "https://rzp.io/i/recovered", checkoutExpiresAt: now + day, recommendedAction: "STOP_RECOVERED", nextActionAt: null, contactEligible: false, recoveredAmount: 149_900, reason: "Payment captured; all pending recovery actions cancelled" }
+        data: { sessionId: "chk_70d1", orderId: "order_demo_paid", stage: "PAID", paymentMethod: "upi", customerActive: false, originalCheckoutUrl: "https://rzp.io/i/recovered", checkoutExpiresAt: now + day, recommendedAction: "STOP_RECOVERED", nextActionAt: null, contactEligible: false, recoveredAmount: 149_900, reason: "Payment captured; all pending recovery actions cancelled", workflowStage: "PAID", recoveryPath: null, abandonedAt: now - 1_800, recoveryScheduledAt: now - 1_500, paidAt: now - 600, lastActivityAt: now - 600, lastActivity: "Signed Razorpay payment verified; every recovery action was stopped" }
       }, now),
       object<SubscriptionData>({
         id: "sub_stream_pro", kind: "SUBSCRIPTION", status: "PROVIDER_RETRY", amount: 49_900, currency: "INR", priority: 81, customerRef: "cus_302A",
-        data: { plan: "Stream Pro annual", invoiceId: "inv_S101", failedAttempts: 1, providerRetryAt: now + 9 * hour, mandateStatus: "ACTIVE", recommendedAction: "WAIT_FOR_PROVIDER_RETRY", nextActionAt: now + 9 * hour, outstandingAmount: 49_900 }
+        data: { plan: "Stream Pro annual", invoiceId: "inv_S101", failedAttempts: 1, providerRetryAt: now + 9 * hour, mandateStatus: "ACTIVE", recommendedAction: "WAIT_FOR_PROVIDER_RETRY", nextActionAt: now + 9 * hour, outstandingAmount: 49_900, workflowStage: "PROVIDER_RETRY_PENDING", lastActivityAt: now, lastActivity: "Razorpay owns the next retry; competing debit and outreach are paused" }
       }, now),
       object<SubscriptionData>({
         id: "sub_cloud_halted", kind: "SUBSCRIPTION", status: "HALTED", amount: 129_900, currency: "INR", priority: 91, customerRef: "cus_4F21",
-        data: { plan: "Cloud Team", invoiceId: "inv_S205", failedAttempts: 4, providerRetryAt: null, mandateStatus: "TOKEN_EXPIRED", recommendedAction: "REQUEST_PAYMENT_METHOD_UPDATE", nextActionAt: now, outstandingAmount: 129_900 }
+        data: { plan: "Cloud Team", invoiceId: "inv_S205", failedAttempts: 4, providerRetryAt: null, mandateStatus: "TOKEN_EXPIRED", recommendedAction: "REQUEST_PAYMENT_METHOD_UPDATE", nextActionAt: now, outstandingAmount: 129_900, workflowStage: "METHOD_UPDATE_REQUIRED", methodUpdateRequestedAt: null, lastActivityAt: now, lastActivity: "Provider retries exhausted; a payment-method update is required" }
       }, now),
       object<ReceivableData>({
         id: "recv_acme_1042", kind: "RECEIVABLE", status: "BLOCKED", amount: 845_000, currency: "INR", priority: 97, customerRef: "org_NORTHSTAR",
@@ -110,7 +110,7 @@ export class RevenueIntelligenceService {
       }, now),
       object<MandateData>({
         id: "mandate_upi_22", kind: "MANDATE", status: "SEQUENCING", amount: 89_900, currency: "INR", priority: 83, customerRef: "cus_6C09",
-        data: { rail: "UPI AutoPay", attempt: 1, maxAttempts: 3, bankHealthy: true, duplicateDebitRisk: false, nextAttemptAt: now + 6 * hour, steps: [
+        data: { rail: "UPI AutoPay", attempt: 1, maxAttempts: 3, bankHealthy: true, duplicateDebitRisk: false, nextAttemptAt: now + 6 * hour, lastEvaluatedAt: now, lastActivity: "Preferred success window selected for the next bounded attempt", steps: [
           { label: "Provider-managed retry", status: "DONE", scheduledAt: now - day },
           { label: "Preferred success window", status: "CURRENT", scheduledAt: now + 6 * hour },
           { label: "Mandate update", status: "QUEUED", scheduledAt: null },
@@ -119,7 +119,7 @@ export class RevenueIntelligenceService {
       }, now),
       object<MandateData>({
         id: "mandate_card_risky", kind: "MANDATE", status: "BLOCKED", amount: 219_900, currency: "INR", priority: 90, customerRef: "cus_93DD",
-        data: { rail: "Card mandate", attempt: 2, maxAttempts: 3, bankHealthy: false, duplicateDebitRisk: true, nextAttemptAt: null, steps: [
+        data: { rail: "Card mandate", attempt: 2, maxAttempts: 3, bankHealthy: false, duplicateDebitRisk: true, nextAttemptAt: null, lastEvaluatedAt: now, lastActivity: "Retry blocked because duplicate-debit and bank-health checks failed", steps: [
           { label: "Provider-managed retry", status: "DONE", scheduledAt: now - 2 * day },
           { label: "Outage-aware retry", status: "BLOCKED", scheduledAt: null },
           { label: "Payment method update", status: "QUEUED", scheduledAt: null }
@@ -158,6 +158,16 @@ export class RevenueIntelligenceService {
   }
 
   observeProviderEvent(event: NormalizedEvent): void {
+    if (["payment.captured", "order.paid"].includes(event.type)) {
+      const orderId = event.orderId ?? (event.type === "order.paid" ? event.entityId : null);
+      if (!orderId) return;
+      const now = this.clock.now();
+      for (const journey of this.repository.listRevenueObjects<JourneyData>("JOURNEY")) {
+        if (journey.data.orderId !== orderId || journey.status === "PAID") continue;
+        this.closeJourneyPayment(journey, now, "razorpay-webhook");
+      }
+      return;
+    }
     if (!event.type.startsWith("payment.downtime.")) return;
     const now = this.clock.now();
     const suffix = event.entityId.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 48) || "provider";
@@ -403,7 +413,14 @@ export class RevenueIntelligenceService {
         nextActionAt: now + 900,
         contactEligible: false,
         recoveredAmount: 0,
-        reason: "Active checkout registered; recovery contact is suppressed while the customer is present"
+        reason: "Active checkout registered; recovery contact is suppressed while the customer is present",
+        workflowStage: "SESSION_OPEN",
+        recoveryPath: null,
+        abandonedAt: null,
+        recoveryScheduledAt: null,
+        paidAt: null,
+        lastActivityAt: now,
+        lastActivity: "Checkout session registered; observing customer activity before any intervention"
       }
     }, now);
     const stored = this.repository.upsertRevenueObject(journey, "checkout-sdk");
@@ -478,7 +495,11 @@ export class RevenueIntelligenceService {
           mandateStatus: "TOKEN_EXPIRED",
           recommendedAction: "REQUEST_PAYMENT_METHOD_UPDATE",
           nextActionAt: now,
-          outstandingAmount: 129_900
+          outstandingAmount: 129_900,
+          workflowStage: "METHOD_UPDATE_REQUIRED",
+          methodUpdateRequestedAt: null,
+          lastActivityAt: now,
+          lastActivity: "Provider retries exhausted; a payment-method update is required"
         }
       }, now), "scenario-lab");
       this.repository.upsertRevenueObject(object<MandateData>({
@@ -496,6 +517,8 @@ export class RevenueIntelligenceService {
           bankHealthy: true,
           duplicateDebitRisk: false,
           nextAttemptAt: now + 6 * 3_600,
+          lastEvaluatedAt: now,
+          lastActivity: "Preferred success window selected for the next bounded attempt",
           steps: [
             { label: "Provider-managed retry", status: "DONE", scheduledAt: now - 3_600 },
             { label: "Preferred success window", status: "CURRENT", scheduledAt: now + 6 * 3_600 },
@@ -584,22 +607,37 @@ export class RevenueIntelligenceService {
   }): RevenueObject<JourneyData> {
     const item = this.require<JourneyData>(id, "JOURNEY");
     if (item.status === "PAID" && signal.stage !== "PAID") throw new Error("A paid journey cannot be reopened");
+    if (item.status === "PAID") return item;
+    const now = this.clock.now();
     const paid = signal.stage === "PAID";
     const abandoned = signal.stage === "ABANDONED";
-    const originalValid = Boolean(item.data.originalCheckoutUrl) && item.data.checkoutExpiresAt > this.clock.now();
+    const originalValid = Boolean(item.data.originalCheckoutUrl) && item.data.checkoutExpiresAt > now;
     return this.save({
       ...item,
       status: paid ? "PAID" : abandoned ? "ABANDONED" : signal.customerActive ? "ACTIVE" : "OBSERVING",
       data: {
         ...item.data,
         stage: signal.stage,
-        customerActive: signal.customerActive,
+        customerActive: paid ? false : signal.customerActive,
         paymentMethod: signal.paymentMethod ?? item.data.paymentMethod,
         recoveredAmount: paid ? item.amount : item.data.recoveredAmount,
         contactEligible: !paid && abandoned,
         recommendedAction: paid ? "STOP_RECOVERED" : abandoned ? (originalValid ? "REUSE_EXISTING_CHECKOUT" : "CREATE_BOUNDED_LINK") : "OBSERVE_ACTIVE_RETRY",
-        nextActionAt: paid ? null : abandoned ? this.clock.now() + 300 : this.clock.now() + 900,
-        reason: paid ? "Verified checkout success; all recovery stopped" : abandoned ? (originalValid ? "Customer left; reuse the still-valid checkout after cooldown" : "Customer left and checkout expired; bounded replacement required") : "Customer activity detected; suppress outreach"
+        nextActionAt: paid ? null : abandoned ? now + 300 : now + 900,
+        reason: paid ? "Verified checkout success; all recovery stopped" : abandoned ? (originalValid ? "Customer left; reuse the still-valid checkout after cooldown" : "Customer left and checkout expired; bounded replacement required") : "Customer activity detected; suppress outreach",
+        workflowStage: paid ? "PAID" : abandoned ? "ABANDONED" : signal.stage === "CHECKOUT_OPENED" ? "SESSION_OPEN" : "ACTIVE_OBSERVATION",
+        recoveryPath: paid ? null : abandoned ? null : item.data.recoveryPath ?? null,
+        abandonedAt: abandoned ? now : item.data.abandonedAt ?? null,
+        recoveryScheduledAt: paid ? item.data.recoveryScheduledAt ?? null : abandoned ? null : item.data.recoveryScheduledAt ?? null,
+        paidAt: paid ? now : null,
+        lastActivityAt: now,
+        lastActivity: paid
+          ? "Signed Razorpay payment verified; every pending recovery action was stopped"
+          : abandoned
+            ? originalValid
+              ? "Inactivity threshold reached; original checkout is eligible for safe reuse"
+              : "Inactivity threshold reached; original checkout expired and bounded recovery is required"
+            : "Customer activity observed; recovery contact and duplicate checkout remain suppressed"
       }
     }, "CHECKOUT_JOURNEY_SIGNAL", { stage: signal.stage, customerActive: signal.customerActive });
   }
@@ -669,18 +707,40 @@ export class RevenueIntelligenceService {
   recoverJourney(id: string): RevenueObject<JourneyData> {
     const item = this.require<JourneyData>(id, "JOURNEY");
     if (item.status === "PAID") return item;
+    const now = this.clock.now();
     if (item.data.customerActive) {
-      return this.save({ ...item, status: "OBSERVING", data: { ...item.data, contactEligible: false, recommendedAction: "OBSERVE_ACTIVE_RETRY", nextActionAt: this.clock.now() + 900 } }, "SUPPRESS_ACTIVE_CHECKOUT_CONTACT", { reusedExistingCheckout: true });
+      return this.save({
+        ...item,
+        status: "OBSERVING",
+        data: {
+          ...item.data,
+          workflowStage: "ACTIVE_OBSERVATION",
+          contactEligible: false,
+          recommendedAction: "OBSERVE_ACTIVE_RETRY",
+          nextActionAt: now + 900,
+          recoveryPath: null,
+          lastActivityAt: now,
+          lastActivity: "Customer activity rechecked; outreach and duplicate checkout remain suppressed",
+          reason: "Customer is still active in checkout; PayArc will observe for another 15 minutes"
+        }
+      }, "SUPPRESS_ACTIVE_CHECKOUT_CONTACT", { reusedExistingCheckout: true, contactSuppressed: true });
     }
-    const existingValid = Boolean(item.data.originalCheckoutUrl) && item.data.checkoutExpiresAt > this.clock.now();
+    const existingValid = Boolean(item.data.originalCheckoutUrl) && item.data.checkoutExpiresAt > now;
     return this.save({
       ...item,
       status: existingValid ? "RECOVERY_SCHEDULED" : "LINK_REQUIRED",
       data: {
         ...item.data,
+        workflowStage: "RECOVERY_PATH_READY",
         recommendedAction: existingValid ? "REUSE_EXISTING_CHECKOUT" : "CREATE_BOUNDED_LINK",
-        nextActionAt: this.clock.now() + (existingValid ? 300 : 0),
+        nextActionAt: now + (existingValid ? 300 : 0),
         contactEligible: true,
+        recoveryPath: existingValid ? "ORIGINAL_CHECKOUT" : "BOUNDED_LINK",
+        recoveryScheduledAt: now,
+        lastActivityAt: now,
+        lastActivity: existingValid
+          ? "Original Razorpay checkout reserved as the recovery path; no duplicate link created"
+          : "Original checkout unavailable; waiting for signed failure evidence before bounded recovery",
         reason: existingValid ? "Existing Razorpay checkout reused; no duplicate link created" : "Original checkout is unavailable; bounded replacement link required"
       }
     }, "RECOVER_JOURNEY", { reusedExistingCheckout: existingValid });
@@ -688,17 +748,107 @@ export class RevenueIntelligenceService {
 
   payJourney(id: string): RevenueObject<JourneyData> {
     const item = this.require<JourneyData>(id, "JOURNEY");
-    return this.save({ ...item, status: "PAID", data: { ...item.data, stage: "PAID", recoveredAmount: item.amount, contactEligible: false, recommendedAction: "STOP_RECOVERED", nextActionAt: null, reason: "Verified payment stopped every pending recovery action" } }, "VERIFY_JOURNEY_PAYMENT", { recoveredAmount: item.amount });
+    if (item.status === "PAID") return item;
+    return this.closeJourneyPayment(item, this.clock.now(), "scenario-lab");
+  }
+
+  private closeJourneyPayment(item: RevenueObject<JourneyData>, now: number, source: "razorpay-webhook" | "scenario-lab"): RevenueObject<JourneyData> {
+    const providerVerified = source === "razorpay-webhook";
+    return this.save({
+      ...item,
+      status: "PAID",
+      data: {
+        ...item.data,
+        stage: "PAID",
+        workflowStage: "PAID",
+        customerActive: false,
+        recoveredAmount: item.amount,
+        contactEligible: false,
+        recommendedAction: "STOP_RECOVERED",
+        nextActionAt: null,
+        recoveryPath: null,
+        paidAt: now,
+        lastActivityAt: now,
+        lastActivity: providerVerified
+          ? "Signed Razorpay payment verified; every pending recovery action was cancelled"
+          : "Demo paid outcome applied; every pending recovery action was cancelled",
+        reason: providerVerified ? "Verified provider payment stopped every pending recovery action" : "Demo paid outcome stopped every pending recovery action"
+      }
+    }, providerVerified ? "VERIFY_JOURNEY_PAYMENT" : "DEMO_JOURNEY_PAYMENT", { recoveredAmount: item.amount, pendingActionsCancelled: true, source });
   }
 
   advanceSubscription(id: string): RevenueObject<SubscriptionData> {
     const item = this.require<SubscriptionData>(id, "SUBSCRIPTION");
     if (["RECOVERED", "CANCELLED"].includes(item.status)) return item;
-    if (item.data.providerRetryAt && item.data.providerRetryAt > this.clock.now()) {
-      return this.save(item, "HONOR_PROVIDER_RETRY", { nextActionAt: item.data.providerRetryAt });
+    const now = this.clock.now();
+    if (item.data.providerRetryAt && item.data.providerRetryAt > now) {
+      return this.save({
+        ...item,
+        status: "PROVIDER_RETRY",
+        data: {
+          ...item.data,
+          workflowStage: "PROVIDER_RETRY_PENDING",
+          recommendedAction: "WAIT_FOR_PROVIDER_RETRY",
+          nextActionAt: item.data.providerRetryAt,
+          lastActivityAt: now,
+          lastActivity: "Provider retry window rechecked; competing debit and customer outreach remain paused"
+        }
+      }, "HONOR_PROVIDER_RETRY", { nextActionAt: item.data.providerRetryAt, competingAttemptCreated: false });
+    }
+    if (["HALTED", "METHOD_UPDATE_REQUIRED"].includes(item.status) || item.data.recommendedAction === "REQUEST_PAYMENT_METHOD_UPDATE") {
+      return this.save({
+        ...item,
+        status: "METHOD_UPDATE_SENT",
+        data: {
+          ...item.data,
+          workflowStage: "METHOD_UPDATE_SENT",
+          methodUpdateRequestedAt: now,
+          recommendedAction: "AWAIT_PAYMENT_METHOD_UPDATE",
+          nextActionAt: now + 86_400,
+          lastActivityAt: now,
+          lastActivity: "Secure payment-method update request sent; automatic debit remains paused"
+        }
+      }, "REQUEST_SUBSCRIPTION_METHOD_UPDATE", { invoiceId: item.data.invoiceId, automaticDebitPaused: true });
+    }
+    if (item.status === "METHOD_UPDATE_SENT") {
+      return this.save({
+        ...item,
+        status: "RETRY_SCHEDULED",
+        data: {
+          ...item.data,
+          workflowStage: "RETRY_SCHEDULED",
+          mandateStatus: "UPDATED",
+          recommendedAction: "RUN_BOUNDED_RETRY",
+          nextActionAt: now + 21_600,
+          lastActivityAt: now,
+          lastActivity: "Updated mandate confirmed; one bounded retry scheduled in the preferred success window"
+        }
+      }, "SCHEDULE_SUBSCRIPTION_RETRY", { nextActionAt: now + 21_600, boundedAttempts: 1 });
+    }
+    if (item.status === "RETRY_SCHEDULED") {
+      return this.save({
+        ...item,
+        data: {
+          ...item.data,
+          workflowStage: "RETRY_SCHEDULED",
+          lastActivityAt: now,
+          lastActivity: "Bounded retry is already scheduled; waiting for the signed Razorpay outcome"
+        }
+      }, "HONOR_SCHEDULED_SUBSCRIPTION_RETRY", { nextActionAt: item.data.nextActionAt, duplicateAttemptCreated: false });
     }
     const needsUpdate = item.data.mandateStatus.includes("EXPIRED") || item.data.failedAttempts >= 3;
-    return this.save({ ...item, status: needsUpdate ? "METHOD_UPDATE_REQUIRED" : "RETRY_SCHEDULED", data: { ...item.data, recommendedAction: needsUpdate ? "REQUEST_PAYMENT_METHOD_UPDATE" : "SCHEDULE_PROVIDER_RETRY", nextActionAt: needsUpdate ? this.clock.now() : this.clock.now() + 21_600 } }, "ADVANCE_SUBSCRIPTION", { needsPaymentMethodUpdate: needsUpdate });
+    return this.save({
+      ...item,
+      status: needsUpdate ? "METHOD_UPDATE_REQUIRED" : "RETRY_SCHEDULED",
+      data: {
+        ...item.data,
+        workflowStage: needsUpdate ? "METHOD_UPDATE_REQUIRED" : "RETRY_SCHEDULED",
+        recommendedAction: needsUpdate ? "REQUEST_PAYMENT_METHOD_UPDATE" : "SCHEDULE_PROVIDER_RETRY",
+        nextActionAt: needsUpdate ? now : now + 21_600,
+        lastActivityAt: now,
+        lastActivity: needsUpdate ? "Payment-method update required before another debit" : "One bounded provider retry scheduled"
+      }
+    }, "ADVANCE_SUBSCRIPTION", { needsPaymentMethodUpdate: needsUpdate });
   }
 
   contactReceivable(id: string): RevenueObject<ReceivableData> {
@@ -786,8 +936,18 @@ export class RevenueIntelligenceService {
 
   advanceMandate(id: string): RevenueObject<MandateData> {
     const item = this.require<MandateData>(id, "MANDATE");
+    const now = this.clock.now();
     if (item.data.duplicateDebitRisk || !item.data.bankHealthy) {
-      return this.save({ ...item, status: "BLOCKED", data: { ...item.data, nextAttemptAt: null } }, "BLOCK_UNSAFE_MANDATE_RETRY", { duplicateDebitRisk: item.data.duplicateDebitRisk, bankHealthy: item.data.bankHealthy });
+      return this.save({
+        ...item,
+        status: "BLOCKED",
+        data: {
+          ...item.data,
+          nextAttemptAt: null,
+          lastEvaluatedAt: now,
+          lastActivity: `Safety rechecked; retry remains blocked (${item.data.duplicateDebitRisk ? "duplicate-debit risk" : "bank unhealthy"})`
+        }
+      }, "BLOCK_UNSAFE_MANDATE_RETRY", { duplicateDebitRisk: item.data.duplicateDebitRisk, bankHealthy: item.data.bankHealthy });
     }
     const steps = item.data.steps.map((step) => ({ ...step }));
     const current = steps.findIndex((step) => step.status === "CURRENT");
@@ -795,9 +955,22 @@ export class RevenueIntelligenceService {
     const next = steps.findIndex((step, index) => index > current && step.status === "QUEUED");
     if (next >= 0) {
       steps[next]!.status = "CURRENT";
-      steps[next]!.scheduledAt = this.clock.now() + 21_600;
+      steps[next]!.scheduledAt = now + 21_600;
     }
-    return this.save({ ...item, status: next >= 0 ? "SEQUENCING" : "EXHAUSTED", data: { ...item.data, attempt: Math.min(item.data.maxAttempts, item.data.attempt + 1), steps, nextAttemptAt: next >= 0 ? this.clock.now() + 21_600 : null } }, "ADVANCE_MANDATE_SEQUENCE", { nextStep: next >= 0 ? steps[next]!.label : null });
+    return this.save({
+      ...item,
+      status: next >= 0 ? "SEQUENCING" : "EXHAUSTED",
+      data: {
+        ...item.data,
+        attempt: Math.min(item.data.maxAttempts, item.data.attempt + 1),
+        steps,
+        nextAttemptAt: next >= 0 ? now + 21_600 : null,
+        lastEvaluatedAt: now,
+        lastActivity: next >= 0
+          ? `${steps[next]!.label} scheduled as the next bounded attempt`
+          : "Attempt plan exhausted; automatic debits stopped and manual checkout is required"
+      }
+    }, "ADVANCE_MANDATE_SEQUENCE", { nextStep: next >= 0 ? steps[next]!.label : null });
   }
 
   respondConversation(id: string, intent: "PROMISE_TOMORROW" | "SEND_UPI" | "ALREADY_PAID" | "OPT_OUT"): RevenueObject<ConversationData> {

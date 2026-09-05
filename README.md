@@ -296,7 +296,7 @@ The callback is `https://your-host/webhooks/whatsapp`. Provider and messaging cr
 - **Dashboard:** React, Vite, Recharts, responsive Razorpay-inspired UI
 - **Integrations:** Razorpay Test Mode, Groq/OpenAI decision adapters, WhatsApp Cloud API
 - **Realtime:** authenticated server-sent events
-- **Verification:** 62 automated tests covering recovery, provider contracts, automation, authentication, security, and concurrency
+- **Verification:** 65 automated tests covering recovery, provider contracts, automation, authentication, security, and concurrency
 
 ```text
 src/

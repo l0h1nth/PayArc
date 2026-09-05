@@ -94,9 +94,9 @@ A successful callback response contains the number of accepted messages and reda
 - `POST /api/revenue/incidents/:id/resolve` — clear the outage circuit breaker and begin a 25% staged release
 - `POST /api/revenue/incidents/:id/release` — release the next 25% of recovery traffic
 - `POST /api/revenue/journeys` — register a tokenized checkout session and its existing checkout URL
-- `POST /api/revenue/journeys/:id/signal` — submit checkout activity, failure, abandonment, or verified paid state
+- `POST /api/revenue/journeys/:id/signal` — submit checkout activity, failure, or abandonment; paid state is accepted only from signed provider events
 - `POST /api/revenue/journeys/:id/recover` — observe an active customer, reuse a valid checkout, or require a bounded replacement
-- `POST /api/revenue/journeys/:id/pay` — local verified-payment demonstration
+- `POST /api/demo/revenue/journeys/:id/pay` — owner-only local paid-outcome demonstration; disabled in production
 - `POST /api/revenue/subscriptions/:id/advance` — honor provider retry or request a method update
 - `POST /api/revenue/mandates/:id/advance` — execute one bounded, outage-aware sequence decision
 - `POST /api/revenue/receivables/:id/contact` — run the next blocker/contact playbook

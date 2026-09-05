@@ -22,11 +22,16 @@ export type JourneyData = {
   sessionId: string; orderId: string | null; stage: string; paymentMethod: string; customerActive: boolean;
   originalCheckoutUrl: string; checkoutExpiresAt: number; recommendedAction: string;
   nextActionAt: number | null; contactEligible: boolean; recoveredAmount: number; reason: string;
+  workflowStage?: "SESSION_OPEN" | "ACTIVE_OBSERVATION" | "ABANDONED" | "RECOVERY_PATH_READY" | "PAID";
+  recoveryPath?: "ORIGINAL_CHECKOUT" | "BOUNDED_LINK" | null; abandonedAt?: number | null;
+  recoveryScheduledAt?: number | null; paidAt?: number | null; lastActivityAt?: number; lastActivity?: string;
 };
 
 export type SubscriptionData = {
   plan: string; invoiceId: string; failedAttempts: number; providerRetryAt: number | null;
   mandateStatus: string; recommendedAction: string; nextActionAt: number | null; outstandingAmount: number;
+  workflowStage?: "PROVIDER_RETRY_PENDING" | "METHOD_UPDATE_REQUIRED" | "METHOD_UPDATE_SENT" | "RETRY_SCHEDULED" | "RECOVERED";
+  methodUpdateRequestedAt?: number | null; lastActivityAt?: number; lastActivity?: string;
 };
 
 export type ReceivableData = {
@@ -40,6 +45,7 @@ export type MandateStep = { label: string; status: string; scheduledAt: number |
 export type MandateData = {
   rail: string; attempt: number; maxAttempts: number; bankHealthy: boolean;
   duplicateDebitRisk: boolean; steps: MandateStep[]; nextAttemptAt: number | null;
+  lastEvaluatedAt?: number; lastActivity?: string;
 };
 
 export type ConversationData = {
